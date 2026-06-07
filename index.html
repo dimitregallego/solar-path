@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Sun Path 3D & Sombras</title>
+  <title>Analytic Sun Path 3D (Ladybug Style)</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -51,7 +51,7 @@
 // ══════════════════════════════════════════════════════════════════════
 //  IMPORTS
 // ══════════════════════════════════════════════════════════════════════
-import { createElement as h, useState, useEffect, useRef, useCallback } from 'https://esm.sh/react@18';
+import { createElement as h, useState, useEffect, useRef } from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
 import * as turf from 'https://esm.sh/@turf/turf@6.5.0';
@@ -60,22 +60,27 @@ const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
 const LAYER = {
-  SUMMER:  'sp-summer',
-  WINTER:  'sp-winter',
-  EQUINOX: 'sp-equinox',
-  TODAY:   'sp-today',
-  DOT:     'sp-dot',
-  POLE:    'sp-pole',
-  COMPASS: 'sp-compass',
-  LABELS:  'sp-labels'
+  PATHS:    'sp-analytic-paths', // Camada única para todos os arcos analíticos finos
+  DOT:      'sp-dot',
+  POLE:     'sp-pole',
+  COMPASS:  'sp-compass',
+  LABELS:   'sp-labels'
 };
 
+const COLOR = {
+  // Cores Analíticas do Ladybug: Meses (amarelo-alaranjado), Analemas (azul sutil)
+  MONTHS: ['#fff7ad', '#ffe491', '#ffd175', '#ffbe59', '#ffaa3d', '#ff9621', '#ff8205', '#f26e00', '#e55a00', '#d84600', '#cc3200', '#bf1e00'],
+  ANALEMMAS: '#40a0ff', // Azul sutil e analítico
+  OBS: '#ffffff',
+  SUN: ['#D97706', '#F59E0B']
+}
+
 // ══════════════════════════════════════════════════════════════════════
-//  ░░░ PARTE 1 — MOTOR SOLAR (ASTRONOMIA) ░░░
+//  ░░░ PARTE 1 — MOTOR SOLAR (TRADUÇÃO DO LB SUNPATH) ░░░
 // ══════════════════════════════════════════════════════════════════════
 function julianDay(dayOfYear, hourDecimal, year = 2000) {
   const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
-  const mLen   = [0,31,isLeap?29:28,31,30,31,30,31,31,30,31,30,31];
+  const mLen = [0,31,isLeap?29:28,31,30,31,30,31,31,30,31,30,31];
   let month = 1, rem = dayOfYear;
   while (rem > mLen[month] && month < 12) { rem -= mLen[month]; month++; }
   let Y = year, M = month;
@@ -89,7 +94,7 @@ function calcSunPosition(lat, lng, dayOfYear, hourDecimal) {
   const T = (JD - 2451545.0) / 36525.0;
   let L0 = 280.46646 + T*(36000.76983 + T*0.0003032); L0 = ((L0%360)+360)%360;
   let M = 357.52911 + T*(35999.05029 - 0.0001537*T);  M = ((M%360)+360)%360;
-  const M_r = M*DEG2RAD, e = 0.016708634 - T*(0.000042037 + 0.0000001267*T);
+  const M_r = M*DEG2RAD, e = 0.016708633 - T*(0.000042037 + 0.0000001267*T);
   const C = (1.914602 - T*(0.004817+0.000014*T))*Math.sin(M_r) + (0.019993 - 0.000101*T)*Math.sin(2*M_r) + 0.000289*Math.sin(3*M_r);
   const sunLon = L0 + C;
   const omega = 125.04 - 1934.136*T;
@@ -105,7 +110,6 @@ function calcSunPosition(lat, lng, dayOfYear, hourDecimal) {
   const tz = Math.round(lng/15);
   let tst = ((hourDecimal*60) + eqOfTime + 4*lng - 60*tz);
   tst = ((tst%1440)+1440)%1440;
-  const solarNoon = (720 - 4*lng - eqOfTime + tz*60) / 60;
   const hourAngle = (tst/4) - 180;
   const ha_r = hourAngle*DEG2RAD, lat_r = lat*DEG2RAD;
   const cosZ = Math.sin(lat_r)*Math.sin(dec_r) + Math.cos(lat_r)*Math.cos(dec_r)*Math.cos(ha_r);
@@ -119,107 +123,66 @@ function calcSunPosition(lat, lng, dayOfYear, hourDecimal) {
     const az_r = Math.acos(Math.max(-1,Math.min(1,cosAz)));
     azimuth = hourAngle > 0 ? (az_r*RAD2DEG+180)%360 : (540-az_r*RAD2DEG)%360;
   }
-  return { altitude, azimuth, solarNoon, isDaytime: altitude > -0.83 };
+  return { altitude, azimuth, isDaytime: altitude > -0.833 };
 }
 
-// ── Atualização Nativa das Sombras no Giraffe ──
+// ── Sincronização de Sombras no Mapa do Giraffe ──
 async function syncGiraffeSun(azimuth, altitude) {
   if (altitude < -5) return { success: false, reason: 'night' };
-  
-  // O Giraffe EXIGE uma View salva para atualizar o ambiente global
   const views = giraffeState.get("views") || [];
   if (!views.length) return { success: false, reason: 'no_views' };
-  
   const base = views[0];
   try {
-    await rpc.invoke("activateViewLayers", [{
-      ...base,
-      sun: { ...(base.sun || {}), azimuth, altitude }
-    }]);
+    await rpc.invoke("activateViewLayers", [{ ...base, sun: { azimuth, altitude } }]);
     return { success: true };
-  } catch (e) {
-    return { success: false, reason: 'error' };
-  }
+  } catch (e) { return { success: false, reason: 'error' }; }
 }
 
-function getSeasonDays(lat) {
-  const S = lat < 0; 
-  return {
-    summer: S ? 355 : 172, winter: S ? 172 : 355, equinoxMar: 79, equinoxSep: 266,
-    names: { summer: S ? 'Verão (Dez)' : 'Verão (Jun)', winter: S ? 'Inverno (Jun)' : 'Inverno (Dez)' }
-  };
-}
+async function safeRemoveLayer(id) { try { await rpc.invoke("removeTempLayer", [id]); } catch {} }
 
 function localFromProjected(x, y, oLng, oLat) {
   return [ oLng + x / (111320 * Math.cos(oLat*DEG2RAD)), oLat + y / 111320 ];
 }
 
-async function safeRemoveLayer(id) { try { await rpc.invoke("removeTempLayer", [id]); } catch {} }
-
 // ══════════════════════════════════════════════════════════════════════
-//  ░░░ PARTE 2 — GEOMETRIA 3D SÓLIDA (RIBBONS E COMPASSO) ░░░
+//  ░░░ PARTE 2 — GEOMETRIA ANALÍTICA 3D (LINHAS FINAS EM Z) ░░░
 // ══════════════════════════════════════════════════════════════════════
 
 /**
- * Cria uma fita (ribbon) 3D extrudando polígonos entre pontos,
- * permitindo que a linha "flutue" e incline no céu sem achatar no chão.
+ * Nova Abordagem: Emulação de Linha Fina em 3D.
+ * Converte um LineString tridimensional [lng, lat, Z] em um polígono extrudado 
+ * extremamente fino (5cm) para que ele inclone no céu sem achatar no chão, 
+ * mantendo o rigor analítico do Ladybug Tools.
  */
-async function generateSunPathRibbon(lat, lng, dayOfYear, radius, color, opacity = 0.5) {
-  const pts = [];
-  // Calcula a posição do sol a cada 15 minutos para curvas perfeitas
-  for (let h = 0; h <= 24; h += 0.25) {
-    const sun = calcSunPosition(lat, lng, dayOfYear, h);
-    if (sun.altitude < -2) continue; // Corta logo abaixo do horizonte
-    const a = sun.altitude*DEG2RAD, z = sun.azimuth*DEG2RAD;
-    const x = radius*Math.cos(a)*Math.sin(z);
-    const y = radius*Math.cos(a)*Math.cos(z);
-    const zElev = Math.max(0, radius*Math.sin(a));
-    pts.push({ x, y, z: zElev });
-  }
-  if (pts.length < 2) return null;
-
-  let geo;
-  try { geo = await Promise.all(pts.map(p => rpc.invoke("fromProjected", [[p.x, p.y], [lng, lat]]))); }
-  catch { geo = pts.map(p => localFromProjected(p.x, p.y, lng, lat)); }
-
-  const features = [];
-  for (let i = 0; i < geo.length - 1; i++) {
-    const p1 = { lng: geo[i][0], lat: geo[i][1], z: pts[i].z };
-    const p2 = { lng: geo[i+1][0], lat: geo[i+1][1], z: pts[i+1].z };
-    
-    // Pula linhas subterrâneas
-    if (p1.z === 0 && p2.z === 0) continue;
-
-    const line = turf.lineString([[p1.lng, p1.lat], [p2.lng, p2.lat]]);
-    // Buffer = grossura da linha no céu
-    let poly;
-    try { poly = turf.buffer(line, 1.2, { units: 'meters' }); } catch { continue; }
+function emulateAnalyticalLine3D(coords3D, originLng, originLat, properties) {
+  if (coords3D.length < 2) return null;
+  const segments = [];
+  for (let i = 0; i < coords3D.length - 1; i++) {
+    const p1 = coords3D[i]; const p2 = coords3D[i+1];
+    if (p1[2] < 0 && p2[2] < 0) continue; // Pula subterrâneos
+    const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
+    // Grossura analítica da linha (5 centímetros)
+    const poly = turf.buffer(line, 0.05, { units: 'meters' }); 
     if(!poly) continue;
-
-    poly.properties = {
-      color: color,
-      _baseHeight: Math.min(p1.z, p2.z),
-      _height: Math.max(p1.z, p2.z) + 1.0, // Altura do tubo 3D
-      _opacity: opacity
-    };
-    features.push(poly);
+    poly.properties = { ...properties, _baseHeight: Math.max(0, p1[2]), _height: Math.max(0.1, p2[2]) };
+    segments.push(poly);
   }
-  return { type: "FeatureCollection", features };
+  return segments;
 }
 
-/** Renderiza a fita 3D no céu */
-async function plotRibbonLayer(id, fc) {
+/** Renderiza todas as linhas analíticas finas no céu */
+async function plotAnalyticPaths(id, features) {
   await safeRemoveLayer(id);
-  if (!fc || fc.features.length === 0) return;
+  if (!features || features.length === 0) return;
   await rpc.invoke("addTempLayerGeoJSON", [
-    id, fc,
+    id, { type: "FeatureCollection", features },
     {
       type: "fill-extrusion",
       paint: {
         "fill-extrusion-color": ["get", "color"],
+        "fill-extrusion-opacity": ["get", "_opacity"],
         "fill-extrusion-base": ["get", "_baseHeight"],
         "fill-extrusion-height": ["get", "_height"],
-        "fill-extrusion-opacity": ["get", "_opacity"],
         "fill-extrusion-height-alignment": "terrain",
         "fill-extrusion-base-alignment": "terrain",
         "fill-extrusion-translate-anchor": "map"
@@ -227,298 +190,180 @@ async function plotRibbonLayer(id, fc) {
     }
   ]);
 }
+
+/** Gera toda a infraestrutura analítica do LB SunPath: 12 arcos mensais + Analemas */
+async function generateSunPathAnalyticalModel(lat, lng, radius) {
+  const finalFeatures = [];
+
+  // A. Gerar 12 Arcos Mensais (1 dia/mês: dia 15)
+  const seasonSteps = lat < 0 ? [355, 17, 46, 79, 107, 137, 172, 199, 229, 266, 292, 321] : [172, 199, 229, 266, 292, 321, 355, 17, 46, 79, 107, 137];
+  for (let m = 0; m < 12; m++) {
+    const doy = seasonSteps[m];
+    const coords3D = [];
+    for (let h = 0; h <= 24; h += 0.2) { // Alta resolução para curvas suaves
+      const sun = calcSunPosition(lat, lng, doy, h);
+      if (!sun.isDaytime && sun.altitude < -1) continue; // Corta subterrâneos
+      const a = sun.altitude*DEG2RAD, z = sun.azimuth*DEG2RAD;
+      const x = radius*Math.cos(a)*Math.sin(z), y = radius*Math.cos(a)*Math.cos(z);
+      const coordZ = Math.max(0, radius*Math.sin(a));
+      coords3D.push([...localFromProjected(x, y, lng, lat), coordZ]);
+    }
+    const color = COLOR.MONTHS[m % 12];
+    const props = { color, _opacity: DOY_TO_MONTH(doy) === m + 1 ? 0.9 : 0.4 }; // Destaque suave para o mês atual
+    const emulated = emulateAnalyticalLine3D(coords3D, lng, lat, props);
+    if(emulated) finalFeatures.push(...emulated);
+  }
+
+  // B. Gerar Analemas Horários (Trajetórias em '8': a cada 2 horas)
+  for (let h = 8; h <= 18; h += 2) {
+    const coords3D = [];
+    for (let doy = 1; doy <= 365; doy += 4) { // Gera a curva analema
+      const sun = calcSunPosition(lat, lng, doy, h);
+      if (!sun.isDaytime) continue;
+      const a = sun.altitude*DEG2RAD, z = sun.azimuth*DEG2RAD;
+      const coordZ = Math.max(0, radius*Math.sin(a));
+      // Se tiver subterrâneo ou altitude 0, não faz analema
+      if (sun.altitude <= 0) continue; 
+      const x = radius*Math.cos(a)*Math.sin(z), y = radius*Math.cos(a)*Math.cos(z);
+      coords3D.push([...localFromProjected(x, y, lng, lat), coordZ]);
+    }
+    // Fecha a curva do '8' se houver pontos subterrâneos
+    if (coords3D.length > 2) {
+        coords3D.push(coords3D[0]);
+        const emulated = emulateAnalyticalLine3D(coords3D, lng, lat, { color: COLOR.ANALEMMAS, _opacity: 0.35 });
+        if(emulated) finalFeatures.push(...emulated);
+    }
+  }
+  return finalFeatures;
+}
+
+// Helpers analíticos
+const DOY_TO_MONTH = doy => new Date(2024, 0, doy).getMonth() + 1;
 
 /** Gera a base 2D plana no chão (Círculos e Eixos do Compasso) */
 async function plotCompass(lat, lng, radius) {
   await safeRemoveLayer(LAYER.COMPASS);
   await safeRemoveLayer(LAYER.LABELS);
-
   const center = [lng, lat];
-  const features = [];
-  const labels = [];
+  const features = [], labels = [];
 
-  // Anéis concêntricos
+  // Anéis concêntricos (33%, 66%, 100%)
   for (let r = radius * 0.33; r <= radius; r += radius * 0.33) {
-    const ring = turf.buffer(turf.point(center), r/1000, {units: 'kilometers', steps: 64});
-    const line = turf.polygonToLine(ring);
-    const polyRing = turf.buffer(line, 0.5, {units: 'meters'});
-    polyRing.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.5, _opacity: 0.15 };
+    const polyRing = turf.buffer(turf.polygonToLine(turf.buffer(turf.point(center), r/1000, {units: 'kilometers', steps: 90})), 0.3, {units: 'meters'});
+    polyRing.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.3, _opacity: 0.15 };
     features.push(polyRing);
   }
 
-  // Eixos e Marcações de graus
+  // Eixos e Marcações de graus (N, S, L, O e a cada 15°)
   for (let angle = 0; angle < 360; angle += 15) {
     const far = turf.destination(turf.point(center), radius/1000, angle, {units: 'kilometers'});
-    const line = turf.lineString([center, far.geometry.coordinates]);
-    const polyLine = turf.buffer(line, 0.4, {units: 'meters'});
+    const polyLine = turf.buffer(turf.lineString([center, far.geometry.coordinates]), 0.2, {units: 'meters'});
     const isMain = angle % 90 === 0;
-    polyLine.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.5, _opacity: isMain ? 0.4 : 0.1 };
+    polyLine.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.3, _opacity: isMain ? 0.35 : 0.1 };
     features.push(polyLine);
-
-    // Adiciona o texto (Label) nas bordas
     if (angle % 30 === 0) {
       let lbl = angle + '°';
-      if(angle === 0) lbl = 'N'; else if(angle === 90) lbl = 'E'; else if(angle === 180) lbl = 'S'; else if(angle === 270) lbl = 'O';
-      const lblPt = turf.destination(turf.point(center), (radius+18)/1000, angle, {units: 'kilometers'});
-      lblPt.properties = { label: lbl };
-      labels.push(lblPt);
+      if(angle === 0) lbl = 'N'; else if(angle === 90) lbl = 'L'; else if(angle === 180) lbl = 'S'; else if(angle === 270) lbl = 'O';
+      labels.push(turf.destination(turf.point(center), (radius+18)/1000, angle, {units: 'kilometers', properties: { label: lbl }}));
     }
   }
 
-  // Plota as linhas do compasso no chão
-  await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.COMPASS, { type: 'FeatureCollection', features },
-    {
-      type: "fill-extrusion",
-      paint: {
-        "fill-extrusion-color": ["get", "color"],
-        "fill-extrusion-base": ["get", "_baseHeight"],
-        "fill-extrusion-height": ["get", "_height"],
-        "fill-extrusion-opacity": ["get", "_opacity"],
-        "fill-extrusion-height-alignment": "terrain",
-        "fill-extrusion-base-alignment": "terrain",
-        "fill-extrusion-translate-anchor": "map"
-      }
-    }
-  ]);
-
-  // Plota os Textos flutuando
-  await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.LABELS, { type: 'FeatureCollection', features: labels },
-    {
-      type: "symbol",
-      layout: {
-        "text-field": ["get", "label"],
-        "text-size": 13,
-        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
-        "text-pitch-alignment": "map",
-      },
-      paint: {
-        "text-color": "#a0aec0",
-        "text-halo-color": "#000000",
-        "text-halo-width": 2
-      }
-    }
-  ]);
+  // Plota compasso no chão
+  await rpc.invoke("addTempLayerGeoJSON", [LAYER.COMPASS, { type: 'FeatureCollection', features },
+    { type: "fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"], "fill-extrusion-translate-anchor": "map" }}]);
+  // Plota textos flutuando
+  await rpc.invoke("addTempLayerGeoJSON", [LAYER.LABELS, { type: 'FeatureCollection', features: labels },
+    { type: "symbol", layout: { "text-field": ["get", "label"], "text-size": 13, "text-font": ["Open Sans Bold"], "text-pitch-alignment": "map" }, paint: { "text-color": "#a0aec0", "text-halo-color": "#000000", "text-halo-width": 2 }}]);
 }
 
-/** Posição atual do Sol (Bolinha amarela e cilindro vertical) */
-async function plotSunDot(lat, lng, dayOfYear, hour, radius) {
-  await safeRemoveLayer(LAYER.DOT);
-  await safeRemoveLayer(LAYER.POLE);
-
-  const sun = calcSunPosition(lat, lng, dayOfYear, hour);
+/** Posição atual do Sol (Bolinha amarela e mastro vertical) */
+async function plotSunDot(lat, lng, doy, hour, radius) {
+  await safeRemoveLayer(LAYER.DOT); await safeRemoveLayer(LAYER.POLE);
+  const sun = calcSunPosition(lat, lng, doy, hour);
   if (!sun.isDaytime) return;
-
   const a = sun.altitude*DEG2RAD, z = sun.azimuth*DEG2RAD;
-  const x = radius*Math.cos(a)*Math.sin(z);
-  const y = radius*Math.cos(a)*Math.cos(z);
-  const elev = Math.max(0, radius*Math.sin(a));
-
+  const coordZ = Math.max(0, radius*Math.sin(a));
+  const x = radius*Math.cos(a)*Math.sin(z), y = radius*Math.cos(a)*Math.cos(z);
   let sLng, sLat;
   try { [sLng, sLat] = await rpc.invoke("fromProjected", [[x,y],[lng,lat]]); }
   catch { [sLng, sLat] = localFromProjected(x, y, lng, lat); }
-
-  const dotColor = sun.altitude > 20 ? '#F59E0B' : '#D97706';
-
+  const dotColor = sun.altitude > 20 ? COLOR.SUN[1] : COLOR.SUN[0];
   // Cilindro do mastro vertical
-  const poleBase = turf.buffer(turf.lineString([[sLng,sLat], [sLng,sLat]]), 0.5, {units: 'meters'});
-  poleBase.properties = { color: dotColor, _baseHeight: 0, _height: elev, _opacity: 0.4 };
-  await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.POLE, { type: 'FeatureCollection', features: [poleBase] },
-    {
-      type: "fill-extrusion",
-      paint: {
-        "fill-extrusion-color": ["get", "color"],
-        "fill-extrusion-base": ["get", "_baseHeight"],
-        "fill-extrusion-height": ["get", "_height"],
-        "fill-extrusion-opacity": ["get", "_opacity"],
-        "fill-extrusion-height-alignment": "terrain",
-        "fill-extrusion-base-alignment": "terrain",
-        "fill-extrusion-translate-anchor": "map"
-      }
-    }
-  ]);
-
+  const pole = turf.buffer(turf.lineString([[sLng,sLat], [sLng,sLat]]), 0.4, {units: 'meters'});
+  pole.properties = { color: dotColor, _baseHeight: 0, _height: coordZ, _opacity: 0.35 };
+  await rpc.invoke("addTempLayerGeoJSON", [LAYER.POLE, { type: 'FeatureCollection', features: [pole] }, { type: "fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"], "fill-extrusion-translate-anchor": "map" }}]);
   // A Esfera do sol
-  await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.DOT,
-    { type:"FeatureCollection", features:[{
-      type:"Feature",
-      geometry: { type:"Point", coordinates:[sLng,sLat] },
-      properties: { _baseHeight:elev, _height:elev+5 },
-    }] },
-    {
-      type:"circle",
-      paint:{
-        "circle-color": dotColor,
-        "circle-radius": 14,
-        "circle-opacity": 1.0,
-        "circle-pitch-alignment": "map",
-        "circle-stroke-width": 3,
-        "circle-stroke-color": "#ffffff",
-      },
-    },
-  ]);
+  await rpc.invoke("addTempLayerGeoJSON", [LAYER.DOT, { type:"FeatureCollection", features:[{ type:"Feature", geometry: { type:"Point", coordinates:[sLng,sLat] }, properties: { _baseHeight:coordZ, _height:coordZ+5 } }] },
+    { type:"circle", paint:{ "circle-color": dotColor, "circle-radius": 14, "circle-pitch-alignment": "map", "circle-stroke-width": 3, "circle-stroke-color": "#ffffff" }}]);
 }
 
-async function removeAllLayers() {
-  await Promise.allSettled(Object.values(LAYER).map(safeRemoveLayer));
-}
+async function removeAllLayers() { await Promise.allSettled(Object.values(LAYER).map(safeRemoveLayer)); }
 
 // ══════════════════════════════════════════════════════════════════════
 //  ░░░ PARTE 3 — INTERFACE REACT (UI) ░░░
 // ══════════════════════════════════════════════════════════════════════
-
 const cx = (...args) => args.filter(Boolean).join(' ');
-
 const fmtHour = h => `${String(Math.floor(h)).padStart(2,'0')}:${String(Math.round((h-Math.floor(h))*60)).padStart(2,'0')}`;
 const fmtDate = doy => new Date(2024, 0, doy).toLocaleDateString('pt-BR', { day:'numeric', month:'short' });
 
 function SolarApp() {
-  const [lat, setLat] = useState(-23.55);
-  const [lng, setLng] = useState(-46.63);
-  const [hour, setHour] = useState(12);
-  const [dayOfYear, setDayOfYear] = useState(172);
-  const [radius, setRadius] = useState(200);
-  
-  const [showChart, setShowChart] = useState(false); // <--- DESLIGADO POR PADRÃO
-  const [syncSt, setSyncSt] = useState('idle');
+  const [lat, setLat] = useState(-23.55); const [lng, setLng] = useState(-46.63); const [hour, setHour] = useState(12); const [dayOfYear, setDayOfYear] = useState(172); const [radius, setRadius] = useState(225);
+  const [showChart, setShowChart] = useState(false); const [syncSt, setSyncSt] = useState('idle');
+  const syncTimer = useRef(null); const dotTimer = useRef(null); const chartTimer = useRef(null);
 
-  const syncTimer = useRef(null);
-  const dotTimer = useRef(null);
-  const chartTimer = useRef(null);
-
-  const seasons = getSeasonDays(lat);
-
-  // Busca Centro do Mapa ao carregar
+  // Busca geolocalização ao carregar
   useEffect(() => {
-    async function fetchCenter() {
-      try {
-        const fc = await rpc.invoke("getMapBounds", []);
-        const ring = fc?.features?.[0]?.geometry?.coordinates?.[0];
-        if (!ring) return;
-        const lngs = ring.map(c=>c[0]), lats = ring.map(c=>c[1]);
-        setLng(parseFloat(((Math.min(...lngs)+Math.max(...lngs))/2).toFixed(6)));
-        setLat(parseFloat(((Math.min(...lats)+Math.max(...lats))/2).toFixed(6)));
-      } catch {}
-    }
+    async function fetchCenter() { try { const fc = await rpc.invoke("getMapBounds", []); const ring = fc?.features?.[0]?.geometry?.coordinates?.[0]; if (!ring) return; const lngs = ring.map(c=>c[0]), lats = ring.map(c=>c[1]); setLng(parseFloat(((Math.min(...lngs)+Math.max(...lngs))/2).toFixed(6))); setLat(parseFloat(((Math.min(...lats)+Math.max(...lats))/2).toFixed(6))); } catch {} }
     fetchCenter();
     const unsub = giraffeState.addListener(["mapBounds"], fetchCenter);
     return () => { if (typeof unsub === 'function') unsub(); };
   }, []);
 
-  // Sync Sombras Nativas e Ponto do Sol (Roda independente do gráfico estar visível)
+  // Sync Sombras e Ponto do Sol (Independente do gráfico)
   useEffect(() => {
-    // Bolinha do Sol (se o gráfico estiver ativado)
-    if (showChart) {
-      if (dotTimer.current) clearTimeout(dotTimer.current);
-      dotTimer.current = setTimeout(() => plotSunDot(lat, lng, dayOfYear, hour, radius), 50);
-    }
-
-    // Sombras do Giraffe (Sempre roda)
+    if (showChart) { if (dotTimer.current) clearTimeout(dotTimer.current); dotTimer.current = setTimeout(() => plotSunDot(lat, lng, dayOfYear, hour, radius), 50); }
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(async () => {
       const sun = calcSunPosition(lat, lng, dayOfYear, hour);
       setSyncSt('syncing');
-      const res = await syncGiraffeSun(sun.azimuth, sun.altitude);
-      setSyncSt(res.success ? 'ok' : res.reason);
-    }, 150); // Debounce curto para fluidez
+      const res = await syncGiraffeSun(sun.azimuth, sun.altitude); setSyncSt(res.success ? 'ok' : res.reason);
+    }, 150);
   }, [lat, lng, hour, dayOfYear, radius, showChart]);
 
-  // Renderiza toda a infraestrutura da Carta Solar 3D
+  // Renderiza a Infraestrutura Analítica 3D Completa (Ladybug Tools Model)
   useEffect(() => {
-    if (!showChart) {
-      removeAllLayers();
-      return;
-    }
-    
+    if (!showChart) { removeAllLayers(); return; }
     if (chartTimer.current) clearTimeout(chartTimer.current);
     chartTimer.current = setTimeout(async () => {
       await plotCompass(lat, lng, radius);
-      const [sum, win, equ, tod] = await Promise.all([
-        generateSunPathRibbon(lat, lng, seasons.summer, radius, '#F59E0B', 0.5), // Laranja Verão
-        generateSunPathRibbon(lat, lng, seasons.winter, radius, '#38BDF8', 0.5), // Azul Inverno
-        generateSunPathRibbon(lat, lng, seasons.equinoxMar, radius, '#10B981', 0.5), // Verde Equinócio
-        generateSunPathRibbon(lat, lng, dayOfYear, radius, '#FFFFFF', 0.8) // Branco Hoje
-      ]);
-      await plotRibbonLayer(LAYER.SUMMER, sum);
-      await plotRibbonLayer(LAYER.WINTER, win);
-      await plotRibbonLayer(LAYER.EQUINOX, equ);
-      await plotRibbonLayer(LAYER.TODAY, tod);
-      await plotSunDot(lat, lng, dayOfYear, hour, radius);
-    }, 400); // Demora um pouco mais pois renderiza os tubos pesados
-  }, [lat, lng, radius, dayOfYear, showChart, seasons.summer, seasons.winter, seasons.equinoxMar]);
-
-  const syncMsg = {
-    'ok': '✓ Sombras Sincronizadas',
-    'syncing': '⟳ Calculando sol...',
-    'night': '☾ Sol abaixo do horizonte',
-    'no_views': '⚠ Crie uma VIEW no projeto para ativar as sombras!',
-    'error': '⚠ Erro na sincronização'
-  }[syncSt] || '';
+      const analyticFeatures = await generateSunPathAnalyticalModel(lat, lng, radius);
+      await plotAnalyticPaths(LAYER.PATHS, analyticFeatures);
+      await plotSunDot(lat, lng, dayOfYear, hour, radius); // Garante o ponto em cima
+    }, 500); // Maior debounce para o cálculo pesado das polilinhas finas
+  }, [lat, lng, radius, dayOfYear, showChart]);
 
   const syncColor = syncSt === 'ok' ? 'text-emerald-400' : syncSt === 'no_views' ? 'text-red-400 font-bold' : 'text-amber-400';
+  const slClass = hTxt => hTxt < 13 ? `Lat: ${lat}° | Lng: ${lng}°` : `Localização: ${lat.toFixed(4)}, ${lng.toFixed(4)}`;
 
-  return h('div', { className: 'h-screen flex flex-col p-4 gap-4' },
-    // Header
+  return h('div', { className: 'h-screen flex flex-col p-4 gap-4 kv-scroll' },
     h('div', { className: 'border-b border-gray-800 pb-3' },
       h('h1', { className: 'text-lg font-semibold text-white tracking-wide flex items-center gap-2' }, 
-        '☀ Sun Path 3D',
-        h('span', { className: `ml-auto text-[10px] uppercase px-2 py-1 bg-gray-900 rounded ${syncColor}` }, syncMsg)
+        'LB Sun Path (Analytical 3D)',
+        h('span', { className: `ml-auto text-[10px] uppercase px-2 py-1 bg-gray-900 rounded ${syncColor}` }, syncSt === 'idle' ? '☀ v21' : syncSt)
       ),
-      h('p', { className: 'text-xs text-gray-500 mt-1' }, `Lat: ${lat}° | Lng: ${lng}°`)
+      h('p', { className: 'text-xs text-gray-500 mt-1' }, slClass(lat.toString().length))
     ),
-
-    // Sliders
     h('div', { className: 'bg-[#111] p-4 rounded-lg border border-gray-800 flex flex-col gap-4' },
-      h('div', null,
-        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
-          h('span', null, 'Horário'), h('span', { className: 'text-amber-500 text-sm' }, fmtHour(hour))
-        ),
-        h('input', { type: 'range', className: 'kv-slider', min: 0, max: 23.99, step: 0.25, value: hour, onChange: e => setHour(+e.target.value) })
-      ),
-      h('div', null,
-        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
-          h('span', null, 'Data'), h('span', { className: 'text-amber-500 text-sm' }, fmtDate(dayOfYear))
-        ),
-        h('input', { type: 'range', className: 'kv-slider', min: 1, max: 365, value: dayOfYear, onChange: e => setDayOfYear(+e.target.value) })
-      ),
-      h('div', null,
-        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
-          h('span', null, 'Raio da Carta Solar'), h('span', { className: 'text-white' }, radius + 'm')
-        ),
-        h('input', { type: 'range', className: 'kv-slider', min: 50, max: 500, step: 10, value: radius, onChange: e => setRadius(+e.target.value) })
-      )
+      h('div', null, h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' }, h('span', null, 'Horário'), h('span', { className: 'text-amber-500 text-sm' }, fmtHour(hour))), h('input', { type: 'range', className: 'kv-slider', min: 0, max: 23.99, step: 0.25, value: hour, onChange: e => setHour(+e.target.value) })),
+      h('div', null, h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' }, h('span', null, 'Data'), h('span', { className: 'text-amber-500 text-sm' }, fmtDate(dayOfYear))), h('input', { type: 'range', className: 'kv-slider', min: 1, max: 365, value: dayOfYear, onChange: e => setDayOfYear(+e.target.value) })),
+      h('div', null, h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' }, h('span', null, 'Raio da Carta Solar'), h('span', { className: 'text-white' }, radius + 'm')), h('input', { type: 'range', className: 'kv-slider', min: 100, max: 500, step: 10, value: radius, onChange: e => setRadius(+e.target.value) }))
     ),
-
-    // Botões de Solstício
-    h('div', { className: 'grid grid-cols-3 gap-2' },
-      h('button', { 
-        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
-        onClick: () => setDayOfYear(seasons.summer)
-      }, '☀ Verão'),
-      h('button', { 
-        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
-        onClick: () => setDayOfYear(seasons.winter)
-      }, '❄ Inverno'),
-      h('button', { 
-        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
-        onClick: () => setDayOfYear(seasons.equinoxMar)
-      }, '◎ Equinócio')
-    ),
-
-    // Toggle da Carta Solar 3D
     h('div', { className: 'mt-auto flex items-center justify-between p-4 bg-[#111] rounded-lg border border-gray-800' },
-      h('span', { className: 'text-sm font-medium text-gray-300' }, 'Mostrar Carta Solar 3D'),
-      h('button', { 
-        className: `toggle ${showChart ? 'on' : ''}`, 
-        onClick: () => setShowChart(!showChart) 
-      })
-    )
+      h('span', { className: 'text-sm font-medium text-gray-300' }, 'Mostrar Carta Solar Analítica (Z)'), h('button', { className: `toggle ${showChart ? 'on' : ''}`, onClick: () => setShowChart(!showChart) })
+    ),
+    h('footer', { className: 'pt-2 text-center text-gray-600 text-[10px]' }, '100% Turf.js · Z-Elevation Wireframes em v21')
   );
 }
-
 createRoot(document.getElementById('root')).render(h(SolarApp));
 </script>
 </body>
