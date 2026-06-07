@@ -3,13 +3,13 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>KV Sun Path 3D</title>
+  <title>Sun Path 3D & Sombras</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet" />
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { font-family: 'Hind', system-ui, sans-serif; overflow: hidden; }
-
-    /* ── Range Slider ─────────────────────────────────────────────── */
+    
+    /* ── Range Slider Estilizado ── */
     .kv-slider {
       -webkit-appearance: none; appearance: none;
       width: 100%; height: 3px;
@@ -19,46 +19,60 @@
     .kv-slider::-webkit-slider-thumb {
       -webkit-appearance: none;
       width: 14px; height: 14px; border-radius: 50%;
-      background: #00ACCD; cursor: pointer;
+      background: #F59E0B; cursor: pointer;
       transition: transform 0.1s, box-shadow 0.1s;
+      border: 2px solid #000;
     }
     .kv-slider::-webkit-slider-thumb:active {
       transform: scale(1.35);
-      box-shadow: 0 0 0 5px rgba(0,172,205,0.18);
+      box-shadow: 0 0 0 5px rgba(245,158,11,0.2);
     }
-    .kv-slider::-moz-range-thumb {
-      width: 14px; height: 14px; border-radius: 50%;
-      background: #00ACCD; border: none; cursor: pointer;
-    }
-
-    /* ── Scrollbar ────────────────────────────────────────────────── */
     .kv-scroll::-webkit-scrollbar { width: 3px; }
     .kv-scroll::-webkit-scrollbar-track { background: transparent; }
     .kv-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 2px; }
+
+    /* ── Toggle Switch ── */
+    .toggle {
+      position: relative; width: 36px; height: 20px; background: #2d3748;
+      border-radius: 10px; cursor: pointer; border: none; padding: 0; transition: background 0.2s;
+    }
+    .toggle.on { background: #F59E0B40; border: 1px solid #F59E0B; }
+    .toggle::after {
+      content: ''; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+      border-radius: 50%; background: #718096; transition: transform 0.2s, background 0.2s;
+    }
+    .toggle.on::after { transform: translateX(16px); background: #F59E0B; }
   </style>
 </head>
-<body class="bg-black text-slate-200">
+<body class="bg-[#0f1117] text-slate-200">
 <div id="root"></div>
 
 <script type="module">
 // ══════════════════════════════════════════════════════════════════════
 //  IMPORTS
 // ══════════════════════════════════════════════════════════════════════
-import {
-  createElement as h, useState, useEffect, useRef, useCallback,
-} from 'https://esm.sh/react@18';
+import { createElement as h, useState, useEffect, useRef, useCallback } from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
-
-// ══════════════════════════════════════════════════════════════════════
-//  ░░░ PARTE 1 — MOTOR SOLAR ░░░
-//  NOAA Solar Calculator / Jean Meeus "Astronomical Algorithms" (2ª ed.)
-//  Traduzido do Ladybug Tools sunpath.py
-// ══════════════════════════════════════════════════════════════════════
+import * as turf from 'https://esm.sh/@turf/turf@6.5.0';
 
 const DEG2RAD = Math.PI / 180;
 const RAD2DEG = 180 / Math.PI;
 
+const LAYER = {
+  SUMMER:  'sp-summer',
+  WINTER:  'sp-winter',
+  EQUINOX: 'sp-equinox',
+  TODAY:   'sp-today',
+  DOT:     'sp-dot',
+  POLE:    'sp-pole',
+  COMPASS: 'sp-compass',
+  LABELS:  'sp-labels'
+};
+
+// ══════════════════════════════════════════════════════════════════════
+//  ░░░ PARTE 1 — MOTOR SOLAR (ASTRONOMIA) ░░░
+// ══════════════════════════════════════════════════════════════════════
 function julianDay(dayOfYear, hourDecimal, year = 2000) {
   const isLeap = (year % 4 === 0 && year % 100 !== 0) || (year % 400 === 0);
   const mLen   = [0,31,isLeap?29:28,31,30,31,30,31,31,30,31,30,31];
@@ -71,29 +85,23 @@ function julianDay(dayOfYear, hourDecimal, year = 2000) {
 }
 
 function calcSunPosition(lat, lng, dayOfYear, hourDecimal) {
-  const JD  = julianDay(dayOfYear, hourDecimal);
-  const T   = (JD - 2451545.0) / 36525.0;
-  let   L0  = 280.46646 + T*(36000.76983 + T*0.0003032);
-  L0 = ((L0%360)+360)%360;
-  let   M   = 357.52911 + T*(35999.05029 - 0.0001537*T);
-  M  = ((M%360)+360)%360;
+  const JD = julianDay(dayOfYear, hourDecimal);
+  const T = (JD - 2451545.0) / 36525.0;
+  let L0 = 280.46646 + T*(36000.76983 + T*0.0003032); L0 = ((L0%360)+360)%360;
+  let M = 357.52911 + T*(35999.05029 - 0.0001537*T);  M = ((M%360)+360)%360;
   const M_r = M*DEG2RAD, e = 0.016708634 - T*(0.000042037 + 0.0000001267*T);
-  const C   = (1.914602 - T*(0.004817+0.000014*T))*Math.sin(M_r)
-            + (0.019993 - 0.000101*T)*Math.sin(2*M_r) + 0.000289*Math.sin(3*M_r);
+  const C = (1.914602 - T*(0.004817+0.000014*T))*Math.sin(M_r) + (0.019993 - 0.000101*T)*Math.sin(2*M_r) + 0.000289*Math.sin(3*M_r);
   const sunLon = L0 + C;
-  const omega  = 125.04 - 1934.136*T;
+  const omega = 125.04 - 1934.136*T;
   const lambda = sunLon - 0.00569 - 0.00478*Math.sin(omega*DEG2RAD);
-  const eps0   = 23+(26+(21.448-T*(46.815+T*(0.00059-T*0.001813)))/60)/60;
-  const eps    = eps0 + 0.00256*Math.cos(omega*DEG2RAD);
-  const eps_r  = eps*DEG2RAD;
+  const eps0 = 23+(26+(21.448-T*(46.815+T*(0.00059-T*0.001813)))/60)/60;
+  const eps = eps0 + 0.00256*Math.cos(omega*DEG2RAD);
+  const eps_r = eps*DEG2RAD;
   const sinDec = Math.sin(eps_r)*Math.sin(lambda*DEG2RAD);
   const declination = Math.asin(Math.max(-1,Math.min(1,sinDec)))*RAD2DEG;
   const dec_r = declination*DEG2RAD;
   const y = Math.pow(Math.tan(eps_r/2),2), L0_r = L0*DEG2RAD;
-  const eqOfTime = 4*RAD2DEG*(
-    y*Math.sin(2*L0_r) - 2*e*Math.sin(M_r) + 4*e*y*Math.sin(M_r)*Math.cos(2*L0_r)
-    - 0.5*y*y*Math.sin(4*L0_r) - 1.25*e*e*Math.sin(2*M_r)
-  );
+  const eqOfTime = 4*RAD2DEG*(y*Math.sin(2*L0_r) - 2*e*Math.sin(M_r) + 4*e*y*Math.sin(M_r)*Math.cos(2*L0_r) - 0.5*y*y*Math.sin(4*L0_r) - 1.25*e*e*Math.sin(2*M_r));
   const tz = Math.round(lng/15);
   let tst = ((hourDecimal*60) + eqOfTime + 4*lng - 60*tz);
   tst = ((tst%1440)+1440)%1440;
@@ -101,185 +109,200 @@ function calcSunPosition(lat, lng, dayOfYear, hourDecimal) {
   const hourAngle = (tst/4) - 180;
   const ha_r = hourAngle*DEG2RAD, lat_r = lat*DEG2RAD;
   const cosZ = Math.sin(lat_r)*Math.sin(dec_r) + Math.cos(lat_r)*Math.cos(dec_r)*Math.cos(ha_r);
-  const zenith   = Math.acos(Math.max(-1,Math.min(1,cosZ)))*RAD2DEG;
+  const zenith = Math.acos(Math.max(-1,Math.min(1,cosZ)))*RAD2DEG;
   const altitude = 90 - zenith;
   const sinZ = Math.sin(zenith*DEG2RAD);
   let azimuth;
-  if (Math.abs(sinZ) < 1e-10) {
-    azimuth = lat >= 0 ? 180 : 0;
-  } else {
+  if (Math.abs(sinZ) < 1e-10) { azimuth = lat >= 0 ? 180 : 0; } 
+  else {
     const cosAz = (Math.sin(lat_r)*cosZ - Math.sin(dec_r)) / (Math.cos(lat_r)*sinZ);
-    const az_r  = Math.acos(Math.max(-1,Math.min(1,cosAz)));
+    const az_r = Math.acos(Math.max(-1,Math.min(1,cosAz)));
     azimuth = hourAngle > 0 ? (az_r*RAD2DEG+180)%360 : (540-az_r*RAD2DEG)%360;
   }
-  return { altitude, azimuth, declination, hourAngle, eqOfTime, solarNoon, isDaytime: altitude > -0.83 };
+  return { altitude, azimuth, solarNoon, isDaytime: altitude > -0.83 };
 }
 
-function toMapboxLightPos(az, alt) {
-  return [1.5, (90-az+360)%360, Math.max(1,Math.min(89,90-alt))];
-}
-function sunIntensity(alt) {
-  return alt <= 0 ? 0 : Math.min(0.85, 0.12 + Math.sin(alt*DEG2RAD)*0.73);
-}
-
-// Sync de sombras nativas (activateViewLayers)
+// ── Atualização Nativa das Sombras no Giraffe ──
 async function syncGiraffeSun(azimuth, altitude) {
-  if (altitude < -6) return { success: false, reason: 'night' };
-  const pos   = toMapboxLightPos(azimuth, altitude);
+  if (altitude < -5) return { success: false, reason: 'night' };
+  
+  // O Giraffe EXIGE uma View salva para atualizar o ambiente global
   const views = giraffeState.get("views") || [];
   if (!views.length) return { success: false, reason: 'no_views' };
-  const base  = views[0];
+  
+  const base = views[0];
   try {
     await rpc.invoke("activateViewLayers", [{
       ...base,
-      sun:        { ...(base.sun??{}), azimuth, altitude, position: pos },
-      sunAzimuth: azimuth, sunAltitude: altitude, sunPosition: pos,
-      light:      { anchor:'map', position: pos,
-                    intensity: sunIntensity(altitude),
-                    color: altitude > 15 ? '#ffffff' : altitude > 0 ? '#ffd8aa' : '#eecbaa' },
+      sun: { ...(base.sun || {}), azimuth, altitude }
     }]);
     return { success: true };
-  } catch { return { success: false, reason: 'rpc_error' }; }
+  } catch (e) {
+    return { success: false, reason: 'error' };
+  }
 }
 
-// ══════════════════════════════════════════════════════════════════════
-//  ░░░ PARTE 2 — GEOMETRIA 3D DE ARCOS SOLARES ░░░
-// ══════════════════════════════════════════════════════════════════════
-
-const LAYER = {
-  SUMMER:   'kv-sp-summer',
-  WINTER:   'kv-sp-winter',
-  EQUINOX:  'kv-sp-equinox',
-  TODAY:    'kv-sp-today',
-  DOT:      'kv-sp-dot',
-  POLE:     'kv-sp-pole',
-  OBSERVER: 'kv-sp-observer',   // ponto do observador central
-};
-
 function getSeasonDays(lat) {
-  const S = lat < 0;   // Hemisfério Sul
+  const S = lat < 0; 
   return {
-    summer:  S ? 355 : 172,   // 21 Dez : 21 Jun
-    winter:  S ? 172 : 355,   // 21 Jun : 21 Dez
-    equinoxMar: 79,            // 20 Mar — igual em ambos os hemisférios
-    equinoxSep: 266,           // 23 Set
-    names: {
-      summer:  S ? 'Verão · 21 Dez'   : 'Verão · 21 Jun',
-      winter:  S ? 'Inverno · 21 Jun' : 'Inverno · 21 Dez',
-      equinox: 'Equinócio',
-    },
+    summer: S ? 355 : 172, winter: S ? 172 : 355, equinoxMar: 79, equinoxSep: 266,
+    names: { summer: S ? 'Verão (Dez)' : 'Verão (Jun)', winter: S ? 'Inverno (Jun)' : 'Inverno (Dez)' }
   };
 }
 
-// Fallback local (sem RPC) — erro < 0,5 m para r < 1 km
 function localFromProjected(x, y, oLng, oLat) {
-  return [
-    oLng + x / (111320 * Math.cos(oLat*DEG2RAD)),
-    oLat + y / 111320,
-  ];
+  return [ oLng + x / (111320 * Math.cos(oLat*DEG2RAD)), oLat + y / 111320 ];
 }
 
+async function safeRemoveLayer(id) { try { await rpc.invoke("removeTempLayer", [id]); } catch {} }
+
+// ══════════════════════════════════════════════════════════════════════
+//  ░░░ PARTE 2 — GEOMETRIA 3D SÓLIDA (RIBBONS E COMPASSO) ░░░
+// ══════════════════════════════════════════════════════════════════════
+
 /**
- * Gera Feature GeoJSON LineString 3D para o arco solar de um dia.
- * XYZ Cartesiano (metros, origem = ponto observação):
- *   X = r · cos(alt) · sin(az)   ← Leste
- *   Y = r · cos(alt) · cos(az)   ← Norte
- *   Z = r · sin(alt)              ← Cima
- * Converte via rpc.invoke("fromProjected") em paralelo (Promise.all).
+ * Cria uma fita (ribbon) 3D extrudando polígonos entre pontos,
+ * permitindo que a linha "flutue" e incline no céu sem achatar no chão.
  */
-async function generateSunPathArc(lat, lng, dayOfYear, radius, step = 0.5) {
+async function generateSunPathRibbon(lat, lng, dayOfYear, radius, color, opacity = 0.5) {
   const pts = [];
-  for (let h = 0; h <= 24; h += step) {
+  // Calcula a posição do sol a cada 15 minutos para curvas perfeitas
+  for (let h = 0; h <= 24; h += 0.25) {
     const sun = calcSunPosition(lat, lng, dayOfYear, h);
-    if (!sun.isDaytime) continue;
+    if (sun.altitude < -2) continue; // Corta logo abaixo do horizonte
     const a = sun.altitude*DEG2RAD, z = sun.azimuth*DEG2RAD;
-    pts.push({
-      x: radius*Math.cos(a)*Math.sin(z),
-      y: radius*Math.cos(a)*Math.cos(z),
-      z: Math.max(0, radius*Math.sin(a)),
-    });
+    const x = radius*Math.cos(a)*Math.sin(z);
+    const y = radius*Math.cos(a)*Math.cos(z);
+    const zElev = Math.max(0, radius*Math.sin(a));
+    pts.push({ x, y, z: zElev });
   }
   if (pts.length < 2) return null;
 
   let geo;
-  try {
-    geo = await Promise.all(
-      pts.map(p => rpc.invoke("fromProjected", [[p.x, p.y], [lng, lat]]))
-    );
-  } catch {
-    geo = pts.map(p => localFromProjected(p.x, p.y, lng, lat));
+  try { geo = await Promise.all(pts.map(p => rpc.invoke("fromProjected", [[p.x, p.y], [lng, lat]]))); }
+  catch { geo = pts.map(p => localFromProjected(p.x, p.y, lng, lat)); }
+
+  const features = [];
+  for (let i = 0; i < geo.length - 1; i++) {
+    const p1 = { lng: geo[i][0], lat: geo[i][1], z: pts[i].z };
+    const p2 = { lng: geo[i+1][0], lat: geo[i+1][1], z: pts[i+1].z };
+    
+    // Pula linhas subterrâneas
+    if (p1.z === 0 && p2.z === 0) continue;
+
+    const line = turf.lineString([[p1.lng, p1.lat], [p2.lng, p2.lat]]);
+    // Buffer = grossura da linha no céu
+    let poly;
+    try { poly = turf.buffer(line, 1.2, { units: 'meters' }); } catch { continue; }
+    if(!poly) continue;
+
+    poly.properties = {
+      color: color,
+      _baseHeight: Math.min(p1.z, p2.z),
+      _height: Math.max(p1.z, p2.z) + 1.0, // Altura do tubo 3D
+      _opacity: opacity
+    };
+    features.push(poly);
+  }
+  return { type: "FeatureCollection", features };
+}
+
+/** Renderiza a fita 3D no céu */
+async function plotRibbonLayer(id, fc) {
+  await safeRemoveLayer(id);
+  if (!fc || fc.features.length === 0) return;
+  await rpc.invoke("addTempLayerGeoJSON", [
+    id, fc,
+    {
+      type: "fill-extrusion",
+      paint: {
+        "fill-extrusion-color": ["get", "color"],
+        "fill-extrusion-base": ["get", "_baseHeight"],
+        "fill-extrusion-height": ["get", "_height"],
+        "fill-extrusion-opacity": ["get", "_opacity"],
+        "fill-extrusion-height-alignment": "terrain",
+        "fill-extrusion-base-alignment": "terrain",
+        "fill-extrusion-translate-anchor": "map"
+      }
+    }
+  ]);
+}
+
+/** Gera a base 2D plana no chão (Círculos e Eixos do Compasso) */
+async function plotCompass(lat, lng, radius) {
+  await safeRemoveLayer(LAYER.COMPASS);
+  await safeRemoveLayer(LAYER.LABELS);
+
+  const center = [lng, lat];
+  const features = [];
+  const labels = [];
+
+  // Anéis concêntricos
+  for (let r = radius * 0.33; r <= radius; r += radius * 0.33) {
+    const ring = turf.buffer(turf.point(center), r/1000, {units: 'kilometers', steps: 64});
+    const line = turf.polygonToLine(ring);
+    const polyRing = turf.buffer(line, 0.5, {units: 'meters'});
+    polyRing.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.5, _opacity: 0.15 };
+    features.push(polyRing);
   }
 
-  const coords = geo.map(([pLng, pLat], i) => [pLng, pLat, pts[i].z]);
-  const maxZ   = Math.max(...pts.map(p => p.z));
-  return {
-    type: "Feature",
-    geometry: { type: "LineString", coordinates: coords },
-    properties: {
-      dayOfYear, radius,
-      pointCount: pts.length,
-      _baseHeight: 0, _height: maxZ,
-    },
-  };
-}
+  // Eixos e Marcações de graus
+  for (let angle = 0; angle < 360; angle += 15) {
+    const far = turf.destination(turf.point(center), radius/1000, angle, {units: 'kilometers'});
+    const line = turf.lineString([center, far.geometry.coordinates]);
+    const polyLine = turf.buffer(line, 0.4, {units: 'meters'});
+    const isMain = angle % 90 === 0;
+    polyLine.properties = { color: '#ffffff', _baseHeight: 0, _height: 0.5, _opacity: isMain ? 0.4 : 0.1 };
+    features.push(polyLine);
 
-async function safeRemoveLayer(id) {
-  try { await rpc.invoke("removeTempLayer", [id]); } catch {}
-}
+    // Adiciona o texto (Label) nas bordas
+    if (angle % 30 === 0) {
+      let lbl = angle + '°';
+      if(angle === 0) lbl = 'N'; else if(angle === 90) lbl = 'E'; else if(angle === 180) lbl = 'S'; else if(angle === 270) lbl = 'O';
+      const lblPt = turf.destination(turf.point(center), (radius+18)/1000, angle, {units: 'kilometers'});
+      lblPt.properties = { label: lbl };
+      labels.push(lblPt);
+    }
+  }
 
-async function plotArcLayer(id, feat, color, opacity = 0.55, width = 2.5) {
-  await safeRemoveLayer(id);
-  if (!feat) return;
+  // Plota as linhas do compasso no chão
   await rpc.invoke("addTempLayerGeoJSON", [
-    id,
-    { type:"FeatureCollection", features:[feat] },
+    LAYER.COMPASS, { type: 'FeatureCollection', features },
     {
-      type: "line",
+      type: "fill-extrusion",
       paint: {
-        "line-color":     color,
-        "line-width":     width,
-        "line-opacity":   opacity,
-        "line-elevation": 0,           // Z-coord elevation (Mapbox GL v2.x)
+        "fill-extrusion-color": ["get", "color"],
+        "fill-extrusion-base": ["get", "_baseHeight"],
+        "fill-extrusion-height": ["get", "_height"],
+        "fill-extrusion-opacity": ["get", "_opacity"],
+        "fill-extrusion-height-alignment": "terrain",
+        "fill-extrusion-base-alignment": "terrain",
+        "fill-extrusion-translate-anchor": "map"
+      }
+    }
+  ]);
+
+  // Plota os Textos flutuando
+  await rpc.invoke("addTempLayerGeoJSON", [
+    LAYER.LABELS, { type: 'FeatureCollection', features: labels },
+    {
+      type: "symbol",
+      layout: {
+        "text-field": ["get", "label"],
+        "text-size": 13,
+        "text-font": ["Open Sans Bold", "Arial Unicode MS Bold"],
+        "text-pitch-alignment": "map",
       },
-      layout: { "line-cap":"round", "line-join":"round" },
-    },
+      paint: {
+        "text-color": "#a0aec0",
+        "text-halo-color": "#000000",
+        "text-halo-width": 2
+      }
+    }
   ]);
 }
 
-/**
- * Ponto do observador central (origem dos arcos) — círculo branco/azul.
- * circle-pitch-alignment:'map' → colado ao plano do mapa em 3D.
- */
-async function plotObserverPoint(lat, lng) {
-  await safeRemoveLayer(LAYER.OBSERVER);
-  await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.OBSERVER,
-    { type:"FeatureCollection", features:[{
-      type:"Feature",
-      geometry: { type:"Point", coordinates:[lng, lat] },
-      properties: { _baseHeight:0, _height:0 },
-    }] },
-    {
-      type: "circle",
-      paint: {
-        "circle-color":           "#ffffff",
-        "circle-radius":          5,
-        "circle-opacity":         0.85,
-        "circle-pitch-alignment": "map",
-        "circle-stroke-width":    2.5,
-        "circle-stroke-color":    "#00ACCD",
-        "circle-stroke-opacity":  1.0,
-      },
-    },
-  ]);
-}
-
-/**
- * Bolinha amarela do sol + mastro vertical.
- * Dois layers:
- *   kv-sp-pole — LineString tracejada do solo até Z
- *   kv-sp-dot  — Point com Z, circle-pitch-alignment:'map'
- */
+/** Posição atual do Sol (Bolinha amarela e cilindro vertical) */
 async function plotSunDot(lat, lng, dayOfYear, hour, radius) {
   await safeRemoveLayer(LAYER.DOT);
   await safeRemoveLayer(LAYER.POLE);
@@ -296,45 +319,44 @@ async function plotSunDot(lat, lng, dayOfYear, hour, radius) {
   try { [sLng, sLat] = await rpc.invoke("fromProjected", [[x,y],[lng,lat]]); }
   catch { [sLng, sLat] = localFromProjected(x, y, lng, lat); }
 
-  const dotColor = sun.altitude > 20 ? '#FFD740' : sun.altitude > 5 ? '#FFBB30' : '#FF9020';
+  const dotColor = sun.altitude > 20 ? '#F59E0B' : '#D97706';
 
-  // Mastro vertical (solo → posição 3D do sol)
+  // Cilindro do mastro vertical
+  const poleBase = turf.buffer(turf.lineString([[sLng,sLat], [sLng,sLat]]), 0.5, {units: 'meters'});
+  poleBase.properties = { color: dotColor, _baseHeight: 0, _height: elev, _opacity: 0.4 };
   await rpc.invoke("addTempLayerGeoJSON", [
-    LAYER.POLE,
-    { type:"FeatureCollection", features:[{
-      type:"Feature",
-      geometry: { type:"LineString", coordinates:[[sLng,sLat,0],[sLng,sLat,elev]] },
-      properties: { _baseHeight:0, _height:elev },
-    }] },
+    LAYER.POLE, { type: 'FeatureCollection', features: [poleBase] },
     {
-      type:"line",
-      paint:{
-        "line-color": dotColor, "line-width":1.5,
-        "line-opacity":0.55, "line-dasharray":[4,3],
-        "line-elevation":0,
-      },
-    },
+      type: "fill-extrusion",
+      paint: {
+        "fill-extrusion-color": ["get", "color"],
+        "fill-extrusion-base": ["get", "_baseHeight"],
+        "fill-extrusion-height": ["get", "_height"],
+        "fill-extrusion-opacity": ["get", "_opacity"],
+        "fill-extrusion-height-alignment": "terrain",
+        "fill-extrusion-base-alignment": "terrain",
+        "fill-extrusion-translate-anchor": "map"
+      }
+    }
   ]);
 
-  // Bolinha flutuante (Point com Z + circle-pitch-alignment)
+  // A Esfera do sol
   await rpc.invoke("addTempLayerGeoJSON", [
     LAYER.DOT,
     { type:"FeatureCollection", features:[{
       type:"Feature",
-      geometry: { type:"Point", coordinates:[sLng,sLat,elev] },
-      properties: { _baseHeight:elev, _height:elev+2,
-                    altitude:sun.altitude, azimuth:sun.azimuth },
+      geometry: { type:"Point", coordinates:[sLng,sLat] },
+      properties: { _baseHeight:elev, _height:elev+5 },
     }] },
     {
       type:"circle",
       paint:{
-        "circle-color":           dotColor,
-        "circle-radius":          10,
-        "circle-opacity":         0.95,
+        "circle-color": dotColor,
+        "circle-radius": 14,
+        "circle-opacity": 1.0,
         "circle-pitch-alignment": "map",
-        "circle-stroke-width":    2.5,
-        "circle-stroke-color":    "#ffffff",
-        "circle-stroke-opacity":  0.85,
+        "circle-stroke-width": 3,
+        "circle-stroke-color": "#ffffff",
       },
     },
   ]);
@@ -345,131 +367,40 @@ async function removeAllLayers() {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  ░░░ PARTE 3 — INTERFACE / COMPONENTES ░░░
+//  ░░░ PARTE 3 — INTERFACE REACT (UI) ░░░
 // ══════════════════════════════════════════════════════════════════════
 
 const cx = (...args) => args.filter(Boolean).join(' ');
 
-const fmtHour = h => {
-  const hh = Math.floor(h), mm = Math.round((h-hh)*60);
-  return `${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
-};
-const fmtDate = doy => {
-  const d = new Date(new Date().getFullYear(), 0, doy);
-  return d.toLocaleDateString('pt-BR', { day:'numeric', month:'short' });
-};
-const cardinal = az => ['N','NE','L','SE','S','SO','O','NO'][Math.round(az/45)%8];
+const fmtHour = h => `${String(Math.floor(h)).padStart(2,'0')}:${String(Math.round((h-Math.floor(h))*60)).padStart(2,'0')}`;
+const fmtDate = doy => new Date(2024, 0, doy).toLocaleDateString('pt-BR', { day:'numeric', month:'short' });
 
-// ── Estado inicial ─────────────────────────────────────────────────────
-const _now  = new Date();
-const _doy  = Math.floor((_now - new Date(_now.getFullYear(),0,0)) / 86_400_000);
-const INIT  = {
-  lat: -23.5558, lng: -46.6396,
-  hour:      Math.round((_now.getHours() + _now.getMinutes()/60) * 4) / 4,
-  dayOfYear: Math.max(1, Math.min(365, _doy)),
-  radius:    300,
-};
-
-// ── Sub-componentes ────────────────────────────────────────────────────
-
-/** Slider com rótulo e valor */
-function SliderRow({ label, valueLabel, min, max, step, value, onChange }) {
-  return h('div', { className: 'bg-[#111] border border-[#222] rounded-md px-3 pt-2.5 pb-3' },
-    h('div', { className: 'flex justify-between items-baseline mb-2.5' },
-      h('span', { className: 'text-[10px] uppercase tracking-widest text-gray-500 font-medium' }, label),
-      h('span', { className: 'text-[15px] font-medium tabular-nums text-slate-100 leading-none' }, valueLabel),
-    ),
-    h('input', {
-      type:'range', min, max, step, value,
-      className: 'kv-slider',
-      onChange: e => onChange(e.target.value),
-    }),
-  );
-}
-
-/** Linha de resultado individual */
-function ResultRow({ label, value, accent }) {
-  return h('div', { className: 'flex justify-between items-center py-[5px] border-b border-[#1e1e1e] last:border-0' },
-    h('span', { className: 'text-[11px] text-gray-500' }, label),
-    h('span', { className: cx('text-[12px] font-medium tabular-nums',
-      accent ? 'text-[#00ACCD] text-[14px]' : 'text-slate-200')
-    }, value),
-  );
-}
-
-/** Linha de status de um arco */
-function ArcStatusRow({ color, label, state }) {
-  const map = {
-    idle:    { icon:'○', cls:'text-gray-700' },
-    loading: { icon:'⟳', cls:'text-[#00ACCD] animate-pulse' },
-    ready:   { icon:'✓', cls:'text-emerald-500' },
-    error:   { icon:'⚠', cls:'text-red-500' },
-  };
-  const s = map[state.st] || map.idle;
-  return h('div', { className: 'flex items-center gap-2 py-[5px] border-b border-[#1a1a1a] last:border-0' },
-    h('div', { className: 'w-8 h-[3px] rounded flex-shrink-0', style:{ background: color, opacity: 0.8 } }),
-    h('span', { className: 'text-[11px] text-gray-500 flex-1' }, label),
-    h('span', { className: cx('text-[10px] font-medium tabular-nums', s.cls) },
-      `${s.icon} ${state.pts != null ? state.pts+'pts' : '–'}`
-    ),
-  );
-}
-
-/** Botão de preset (solstício / equinócio) */
-function PresetBtn({ emoji, label, sub, active, borderCls, textCls, bgCls, onClick }) {
-  return h('button', {
-    onClick,
-    className: cx(
-      'flex flex-col items-center justify-center py-2 px-1 rounded border transition-all',
-      'text-center leading-tight gap-0.5',
-      borderCls,
-      active ? bgCls : 'bg-transparent hover:bg-white/[0.03]',
-    ),
-  },
-    h('span', { className: 'text-base leading-none' }, emoji),
-    h('span', { className: cx('text-[10px] font-semibold', textCls) }, label),
-    h('span', { className: 'text-[9px] text-gray-600 leading-none' }, sub),
-  );
-}
-
-// ── Componente principal ───────────────────────────────────────────────
 function SolarApp() {
-  const [lat,       setLat]       = useState(INIT.lat);
-  const [lng,       setLng]       = useState(INIT.lng);
-  const [hour,      setHour]      = useState(INIT.hour);
-  const [dayOfYear, setDayOfYear] = useState(INIT.dayOfYear);
-  const [radius,    setRadius]    = useState(INIT.radius);
-  const [coordSrc,  setCoordSrc]  = useState('default');
-  const [sunResult, setSunResult] = useState(null);
-  const [syncSt,    setSyncSt]    = useState('idle');
-  const [noViews,   setNoViews]   = useState(false);
+  const [lat, setLat] = useState(-23.55);
+  const [lng, setLng] = useState(-46.63);
+  const [hour, setHour] = useState(12);
+  const [dayOfYear, setDayOfYear] = useState(172);
+  const [radius, setRadius] = useState(200);
+  
+  const [showChart, setShowChart] = useState(false); // <--- DESLIGADO POR PADRÃO
+  const [syncSt, setSyncSt] = useState('idle');
 
-  // Estado de cada arco: { st: 'idle'|'loading'|'ready'|'error', pts: number|null }
-  const [arcS, setArcS] = useState({ st:'idle', pts:null });
-  const [arcW, setArcW] = useState({ st:'idle', pts:null });
-  const [arcE, setArcE] = useState({ st:'idle', pts:null });
-  const [arcT, setArcT] = useState({ st:'idle', pts:null });
-  const [dotSt,setDotSt]= useState('idle');
-
-  // Refs para debounce e cancelamento de gerações
-  const syncTimer  = useRef(null);
-  const dotTimer   = useRef(null);
-  const fixedGenId = useRef(0);
-  const todayGenId = useRef(0);
+  const syncTimer = useRef(null);
+  const dotTimer = useRef(null);
+  const chartTimer = useRef(null);
 
   const seasons = getSeasonDays(lat);
 
-  // ── EFEITO 1: Coordenadas do centro do mapa ──────────────────────
+  // Busca Centro do Mapa ao carregar
   useEffect(() => {
     async function fetchCenter() {
       try {
-        const fc   = await rpc.invoke("getMapBounds", []);
+        const fc = await rpc.invoke("getMapBounds", []);
         const ring = fc?.features?.[0]?.geometry?.coordinates?.[0];
-        if (!ring || ring.length < 4) return;
+        if (!ring) return;
         const lngs = ring.map(c=>c[0]), lats = ring.map(c=>c[1]);
         setLng(parseFloat(((Math.min(...lngs)+Math.max(...lngs))/2).toFixed(6)));
         setLat(parseFloat(((Math.min(...lats)+Math.max(...lats))/2).toFixed(6)));
-        setCoordSrc('giraffe');
       } catch {}
     }
     fetchCenter();
@@ -477,292 +408,117 @@ function SolarApp() {
     return () => { if (typeof unsub === 'function') unsub(); };
   }, []);
 
-  // ── EFEITO 2: Cálculo solar + sync de sombras (debounce 100ms) ──
+  // Sync Sombras Nativas e Ponto do Sol (Roda independente do gráfico estar visível)
   useEffect(() => {
-    const result = calcSunPosition(lat, lng, dayOfYear, hour);
-    setSunResult(result);
-    setSyncSt('syncing');
+    // Bolinha do Sol (se o gráfico estiver ativado)
+    if (showChart) {
+      if (dotTimer.current) clearTimeout(dotTimer.current);
+      dotTimer.current = setTimeout(() => plotSunDot(lat, lng, dayOfYear, hour, radius), 50);
+    }
+
+    // Sombras do Giraffe (Sempre roda)
     if (syncTimer.current) clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(async () => {
-      const hasViews = (giraffeState.get("views")||[]).length > 0;
-      setNoViews(!hasViews);
-      const out = await syncGiraffeSun(result.azimuth, result.altitude);
-      setSyncSt(out.reason==='night' ? 'night' : out.success ? 'ok' : 'error');
-    }, 100);
-    return () => { if (syncTimer.current) clearTimeout(syncTimer.current); };
-  }, [lat, lng, hour, dayOfYear]);
+      const sun = calcSunPosition(lat, lng, dayOfYear, hour);
+      setSyncSt('syncing');
+      const res = await syncGiraffeSun(sun.azimuth, sun.altitude);
+      setSyncSt(res.success ? 'ok' : res.reason);
+    }, 150); // Debounce curto para fluidez
+  }, [lat, lng, hour, dayOfYear, radius, showChart]);
 
-  // ── EFEITO 3: Ponto do observador central (lat/lng) ─────────────
+  // Renderiza toda a infraestrutura da Carta Solar 3D
   useEffect(() => {
-    plotObserverPoint(lat, lng);
-  }, [lat, lng]);
-
-  // ── EFEITO 4: Arcos fixos — solstícios + equinócio (debounce 300ms)
-  // Deps: lat, lng, radius (NÃO hora/dia — esses arcos são estáticos)
-  useEffect(() => {
-    const genId = ++fixedGenId.current;
-    setArcS({ st:'loading', pts:null });
-    setArcW({ st:'loading', pts:null });
-    setArcE({ st:'loading', pts:null });
-
-    const timer = setTimeout(async () => {
-      if (genId !== fixedGenId.current) return;
-
-      // Verão
-      try {
-        const f = await generateSunPathArc(lat, lng, seasons.summer, radius);
-        if (genId !== fixedGenId.current) return;
-        await plotArcLayer(LAYER.SUMMER, f, '#FFD740', 0.55, 2.5);
-        setArcS({ st:'ready', pts: f?.properties?.pointCount ?? null });
-      } catch { setArcS({ st:'error', pts:null }); }
-
-      if (genId !== fixedGenId.current) return;
-
-      // Inverno
-      try {
-        const f = await generateSunPathArc(lat, lng, seasons.winter, radius);
-        if (genId !== fixedGenId.current) return;
-        await plotArcLayer(LAYER.WINTER, f, '#78B4D8', 0.50, 2.5);
-        setArcW({ st:'ready', pts: f?.properties?.pointCount ?? null });
-      } catch { setArcW({ st:'error', pts:null }); }
-
-      if (genId !== fixedGenId.current) return;
-
-      // Equinócio (Março)
-      try {
-        const f = await generateSunPathArc(lat, lng, seasons.equinoxMar, radius);
-        if (genId !== fixedGenId.current) return;
-        await plotArcLayer(LAYER.EQUINOX, f, '#FF8C42', 0.50, 2.5);
-        setArcE({ st:'ready', pts: f?.properties?.pointCount ?? null });
-      } catch { setArcE({ st:'error', pts:null }); }
-
-    }, 300);
-    return () => { clearTimeout(timer); fixedGenId.current = genId + 1; };
-  }, [lat, lng, radius]);
-
-  // ── EFEITO 5: Arco do dia atual (debounce 400ms) ─────────────────
-  useEffect(() => {
-    const genId = ++todayGenId.current;
-    setArcT({ st:'loading', pts:null });
-
-    const timer = setTimeout(async () => {
-      if (genId !== todayGenId.current) return;
-      try {
-        const f = await generateSunPathArc(lat, lng, dayOfYear, radius);
-        if (genId !== todayGenId.current) return;
-        await plotArcLayer(LAYER.TODAY, f, '#FFFFFF', 0.75, 2);
-        setArcT({ st:'ready', pts: f?.properties?.pointCount ?? null });
-      } catch { if (genId === todayGenId.current) setArcT({ st:'error', pts:null }); }
-    }, 400);
-    return () => { clearTimeout(timer); todayGenId.current = genId + 1; };
-  }, [lat, lng, dayOfYear, radius]);
-
-  // ── EFEITO 6: Bolinha do sol em tempo real (debounce 80ms) ───────
-  useEffect(() => {
-    setDotSt('loading');
-    if (dotTimer.current) clearTimeout(dotTimer.current);
-    dotTimer.current = setTimeout(async () => {
+    if (!showChart) {
+      removeAllLayers();
+      return;
+    }
+    
+    if (chartTimer.current) clearTimeout(chartTimer.current);
+    chartTimer.current = setTimeout(async () => {
+      await plotCompass(lat, lng, radius);
+      const [sum, win, equ, tod] = await Promise.all([
+        generateSunPathRibbon(lat, lng, seasons.summer, radius, '#F59E0B', 0.5), // Laranja Verão
+        generateSunPathRibbon(lat, lng, seasons.winter, radius, '#38BDF8', 0.5), // Azul Inverno
+        generateSunPathRibbon(lat, lng, seasons.equinoxMar, radius, '#10B981', 0.5), // Verde Equinócio
+        generateSunPathRibbon(lat, lng, dayOfYear, radius, '#FFFFFF', 0.8) // Branco Hoje
+      ]);
+      await plotRibbonLayer(LAYER.SUMMER, sum);
+      await plotRibbonLayer(LAYER.WINTER, win);
+      await plotRibbonLayer(LAYER.EQUINOX, equ);
+      await plotRibbonLayer(LAYER.TODAY, tod);
       await plotSunDot(lat, lng, dayOfYear, hour, radius);
-      setDotSt('ready');
-    }, 80);
-    return () => { if (dotTimer.current) clearTimeout(dotTimer.current); };
-  }, [lat, lng, dayOfYear, hour, radius]);
+    }, 400); // Demora um pouco mais pois renderiza os tubos pesados
+  }, [lat, lng, radius, dayOfYear, showChart, seasons.summer, seasons.winter, seasons.equinoxMar]);
 
-  // ── EFEITO 7: Cleanup ao desmontar ──────────────────────────────
-  useEffect(() => () => { removeAllLayers(); }, []);
+  const syncMsg = {
+    'ok': '✓ Sombras Sincronizadas',
+    'syncing': '⟳ Calculando sol...',
+    'night': '☾ Sol abaixo do horizonte',
+    'no_views': '⚠ Crie uma VIEW no projeto para ativar as sombras!',
+    'error': '⚠ Erro na sincronização'
+  }[syncSt] || '';
 
-  // ── Handlers dos presets ─────────────────────────────────────────
-  const setPreset = useCallback((doy) => setDayOfYear(doy), []);
+  const syncColor = syncSt === 'ok' ? 'text-emerald-400' : syncSt === 'no_views' ? 'text-red-400 font-bold' : 'text-amber-400';
 
-  // Toggle equinócio Mar ↔ Set
-  const handleEquinox = useCallback(() => {
-    setDayOfYear(d => d === seasons.equinoxMar ? seasons.equinoxSep : seasons.equinoxMar);
-  }, [seasons]);
-
-  const equinoxActive = dayOfYear === seasons.equinoxMar || dayOfYear === seasons.equinoxSep;
-  const equinoxSub    = dayOfYear === seasons.equinoxSep ? '23 Set' : '20 Mar';
-
-  // Sync status labels
-  const syncLabel = {
-    idle:'–',syncing:'⟳ sync',ok:'✓ sync',error:'⚠ erro',night:'☾ noite'
-  }[syncSt] || '–';
-  const syncCls = {
-    ok:     'text-emerald-400 bg-emerald-950',
-    error:  'text-red-400 bg-red-950',
-    night:  'text-purple-400 bg-purple-950',
-    syncing:'text-[#00ACCD] bg-sky-950',
-    idle:   'text-gray-600 bg-gray-900',
-  }[syncSt] || 'text-gray-600 bg-gray-900';
-
-  // Global arc status
-  const allReady = [arcS,arcW,arcE,arcT].every(a => a.st === 'ready');
-  const anyLoad  = [arcS,arcW,arcE,arcT].some(a  => a.st === 'loading');
-  const globalSt = allReady ? '✓ prontos' : anyLoad ? '⟳ gerando…' : '–';
-  const globalCls = allReady ? 'text-emerald-400' : anyLoad ? 'text-[#00ACCD]' : 'text-gray-600';
-
-  const sunZ = sunResult
-    ? Math.max(0, radius*Math.sin(Math.max(0,sunResult.altitude)*DEG2RAD)).toFixed(0)
-    : '–';
-
-  // ── RENDER ────────────────────────────────────────────────────────
-  return h('div', { className: 'h-screen flex flex-col bg-black text-slate-200' },
-
-    /* ── Header KV ── */
-    h('header', { className: 'flex items-center gap-2 px-4 py-2.5 border-b border-[#00ACCD] bg-black flex-shrink-0' },
-      h('div', { className: 'w-2 h-2 rounded-full bg-[#00ACCD] flex-shrink-0' }),
-      h('span', { className: 'text-[13px] font-semibold tracking-[0.12em] uppercase text-[#00ACCD]' }, 'Sun Path'),
-      h('span', { className: 'ml-auto text-[10px] text-gray-600 bg-[#111] px-2 py-0.5 rounded' }, 'v3 · KV'),
+  return h('div', { className: 'h-screen flex flex-col p-4 gap-4' },
+    // Header
+    h('div', { className: 'border-b border-gray-800 pb-3' },
+      h('h1', { className: 'text-lg font-semibold text-white tracking-wide flex items-center gap-2' }, 
+        '☀ Sun Path 3D',
+        h('span', { className: `ml-auto text-[10px] uppercase px-2 py-1 bg-gray-900 rounded ${syncColor}` }, syncMsg)
+      ),
+      h('p', { className: 'text-xs text-gray-500 mt-1' }, `Lat: ${lat}° | Lng: ${lng}°`)
     ),
 
-    /* ── Corpo com scroll ── */
-    h('main', { className: 'flex-1 overflow-y-auto kv-scroll p-3 flex flex-col gap-2.5' },
-
-      /* STATUS BAR */
-      h('div', { className: 'flex items-center justify-between bg-[#111] border border-[#222] rounded-md px-3 py-2 gap-2' },
-        h('span', { className: 'text-[11px] text-gray-600 truncate' },
-          coordSrc === 'giraffe' ? '⌖' : '○',
-          ` ${lat.toFixed(4)}° ${lng.toFixed(4)}° `,
-          h('em', { className: 'not-italic text-[#2a2a2a]' }, coordSrc === 'giraffe' ? 'mapa' : 'SP padrão'),
+    // Sliders
+    h('div', { className: 'bg-[#111] p-4 rounded-lg border border-gray-800 flex flex-col gap-4' },
+      h('div', null,
+        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
+          h('span', null, 'Horário'), h('span', { className: 'text-amber-500 text-sm' }, fmtHour(hour))
         ),
-        h('span', { className: cx('text-[10px] font-medium px-2 py-0.5 rounded-full flex-shrink-0', syncCls) },
-          syncLabel,
-        ),
+        h('input', { type: 'range', className: 'kv-slider', min: 0, max: 23.99, step: 0.25, value: hour, onChange: e => setHour(+e.target.value) })
       ),
-
-      /* PRESET RÁPIDO */
-      h('div', { className: 'bg-[#111] border border-[#222] rounded-md p-2.5' },
-        h('p', { className: 'text-[9px] uppercase tracking-widest text-gray-600 mb-2' }, 'Preset Rápido'),
-        h('div', { className: 'grid grid-cols-3 gap-1.5' },
-          h(PresetBtn, {
-            emoji: '☀',
-            label: 'Verão',
-            sub:   seasons.names.summer.split('·')[1]?.trim() ?? '',
-            active: dayOfYear === seasons.summer,
-            borderCls: 'border-amber-500/25',
-            textCls:   'text-amber-400',
-            bgCls:     'bg-amber-500/10',
-            onClick:   () => setPreset(seasons.summer),
-          }),
-          h(PresetBtn, {
-            emoji: '❄',
-            label: 'Inverno',
-            sub:   seasons.names.winter.split('·')[1]?.trim() ?? '',
-            active: dayOfYear === seasons.winter,
-            borderCls: 'border-sky-500/25',
-            textCls:   'text-sky-400',
-            bgCls:     'bg-sky-500/10',
-            onClick:   () => setPreset(seasons.winter),
-          }),
-          h(PresetBtn, {
-            emoji: '◎',
-            label: 'Equinócio',
-            sub:   equinoxSub,
-            active: equinoxActive,
-            borderCls: 'border-orange-500/25',
-            textCls:   'text-orange-400',
-            bgCls:     'bg-orange-500/10',
-            onClick:   handleEquinox,
-          }),
+      h('div', null,
+        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
+          h('span', null, 'Data'), h('span', { className: 'text-amber-500 text-sm' }, fmtDate(dayOfYear))
         ),
+        h('input', { type: 'range', className: 'kv-slider', min: 1, max: 365, value: dayOfYear, onChange: e => setDayOfYear(+e.target.value) })
       ),
-
-      /* SLIDERS */
-      h(SliderRow, {
-        label:'Horário', valueLabel: fmtHour(hour),
-        min:0, max:23.75, step:0.25, value:hour,
-        onChange: v => setHour(parseFloat(v)),
-      }),
-      h(SliderRow, {
-        label:'Dia do Ano', valueLabel: `${dayOfYear} · ${fmtDate(dayOfYear)}`,
-        min:1, max:365, step:1, value:dayOfYear,
-        onChange: v => setDayOfYear(parseInt(v)),
-      }),
-      h(SliderRow, {
-        label:'Raio da Cúpula', valueLabel: `${radius} m`,
-        min:50, max:500, step:5, value:radius,
-        onChange: v => setRadius(parseInt(v)),
-      }),
-
-      /* ARCOS 3D — STATUS */
-      h('div', { className: 'bg-[#111] border border-[#222] rounded-md overflow-hidden' },
-        h('div', { className: 'flex items-center justify-between px-3 py-2 bg-[#0c0c0c] border-b border-[#1a1a1a]' },
-          h('span', { className: 'text-[10px] uppercase tracking-widest text-gray-600' }, '☀ Arcos 3D'),
-          h('span', { className: cx('text-[10px] font-medium', globalCls) }, globalSt),
+      h('div', null,
+        h('div', { className: 'flex justify-between text-xs font-medium text-gray-400 mb-2' },
+          h('span', null, 'Raio da Carta Solar'), h('span', { className: 'text-white' }, radius + 'm')
         ),
-        h('div', { className: 'px-3 py-1' },
-          h(ArcStatusRow, { color:'#FFD740', label: seasons.names.summer,  state: arcS }),
-          h(ArcStatusRow, { color:'#78B4D8', label: seasons.names.winter,  state: arcW }),
-          h(ArcStatusRow, { color:'#FF8C42', label: `Equinócio · ${equinoxSub}`, state: arcE }),
-          h(ArcStatusRow, { color:'#FFFFFF', label: `Hoje · Dia ${dayOfYear} · ${fmtDate(dayOfYear)}`, state: arcT }),
-          /* Ponto do sol */
-          h('div', { className: 'flex items-center gap-2 py-[5px]' },
-            h('div', { className: 'w-8 flex items-center justify-center flex-shrink-0' },
-              h('div', { className: cx(
-                'w-2.5 h-2.5 rounded-full flex-shrink-0 transition-all',
-                sunResult?.isDaytime ? 'bg-amber-400 shadow-[0_0_6px_rgba(251,191,36,0.6)]' : 'bg-gray-700'
-              ) }),
-            ),
-            h('span', { className: 'text-[11px] text-gray-500 flex-1' }, 'Posição solar atual'),
-            h('span', { className: cx('text-[10px] font-medium tabular-nums',
-              sunResult?.isDaytime ? 'text-amber-400' : 'text-gray-700') },
-              sunResult?.isDaytime
-                ? `● ${sunResult.altitude.toFixed(1)}° · Z:${sunZ}m`
-                : '○ noite'
-            ),
-          ),
-        ),
-      ),
+        h('input', { type: 'range', className: 'kv-slider', min: 50, max: 500, step: 10, value: radius, onChange: e => setRadius(+e.target.value) })
+      )
+    ),
 
-      /* RESULTADOS SOLARES */
-      sunResult && h('div', { className: 'bg-[#111] border border-[#222] rounded-md overflow-hidden' },
-        h('div', { className: 'flex items-center gap-2 px-3 py-2 bg-[#0c0c0c] border-b border-[#1a1a1a]' },
-          h('div', { className: cx('w-2 h-2 rounded-full flex-shrink-0',
-            sunResult.isDaytime ? 'bg-amber-400 shadow-[0_0_4px_rgba(251,191,36,0.5)]' : 'bg-gray-700') }),
-          h('span', { className: 'text-[10px] text-gray-600 uppercase tracking-widest' },
-            sunResult.isDaytime
-              ? `${cardinal(sunResult.azimuth)} · meio-dia ${fmtHour(sunResult.solarNoon)}`
-              : 'Sol abaixo do horizonte'
-          ),
-        ),
-        h('div', { className: 'px-3 py-1' },
-          /* Principais — em azul */
-          h(ResultRow, { label:'Altitude Solar (α)', value:`${sunResult.altitude.toFixed(2)}°`,  accent:true }),
-          h(ResultRow, { label:'Azimute Solar (θ)',  value:`${sunResult.azimuth.toFixed(2)}°`,   accent:true }),
-          h('div', { className: 'h-px bg-[#1e1e1e] my-0.5' }),
-          /* Secundários */
-          h(ResultRow, { label:'Z do sol (raio atual)', value:`${sunZ} m` }),
-          h(ResultRow, { label:'Declinação Solar',      value:`${sunResult.declination.toFixed(2)}°` }),
-          h(ResultRow, { label:'Equação do Tempo',      value:`${sunResult.eqOfTime.toFixed(1)} min` }),
-          h(ResultRow, { label:'Meio-dia Solar',        value:fmtHour(sunResult.solarNoon) }),
-          h('div', { className: 'h-px bg-[#1e1e1e] my-0.5' }),
-          h(ResultRow, { label:'Mapbox [r, az, pol]',
-            value: toMapboxLightPos(sunResult.azimuth,sunResult.altitude).map(v=>v.toFixed(1)).join(' · ') }),
-        ),
-      ),
+    // Botões de Solstício
+    h('div', { className: 'grid grid-cols-3 gap-2' },
+      h('button', { 
+        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
+        onClick: () => setDayOfYear(seasons.summer)
+      }, '☀ Verão'),
+      h('button', { 
+        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
+        onClick: () => setDayOfYear(seasons.winter)
+      }, '❄ Inverno'),
+      h('button', { 
+        className: 'bg-gray-800 hover:bg-gray-700 text-xs py-2 rounded border border-gray-700 transition-colors',
+        onClick: () => setDayOfYear(seasons.equinoxMar)
+      }, '◎ Equinócio')
+    ),
 
-      /* AVISOS */
-      noViews && h('div', { className: 'border border-amber-900/50 bg-amber-950/30 rounded-md px-3 py-2 text-[10px] text-amber-700 leading-relaxed' },
-        '⚠ Sem views salvas. Crie 1 view no Giraffe para ativar o sync de sombras nativas.'
-      ),
-
-      /* NOTA DE DEBUG */
-      h('div', { className: 'border border-emerald-900/40 bg-emerald-950/20 rounded-md px-3 py-2 text-[10px] text-emerald-800 leading-relaxed' },
-        '🔍 ',
-        h('code', { className: 'bg-emerald-950/60 text-emerald-600 px-1 py-0.5 rounded font-mono' },
-          "giraffeState.get('views')[0]"),
-        ' → confirme campos de sun position.',
-        h('br'),
-        '💡 Se arcos no solo: ative pitch 3D + buildings no Giraffe.',
-      ),
-
-      /* Spacer bottom */
-      h('div', { className: 'h-2' }),
-
-    ), // fim main
+    // Toggle da Carta Solar 3D
+    h('div', { className: 'mt-auto flex items-center justify-between p-4 bg-[#111] rounded-lg border border-gray-800' },
+      h('span', { className: 'text-sm font-medium text-gray-300' }, 'Mostrar Carta Solar 3D'),
+      h('button', { 
+        className: `toggle ${showChart ? 'on' : ''}`, 
+        onClick: () => setShowChart(!showChart) 
+      })
+    )
   );
 }
 
-// ── Mount ──────────────────────────────────────────────────────────────
 createRoot(document.getElementById('root')).render(h(SolarApp));
 </script>
 </body>
