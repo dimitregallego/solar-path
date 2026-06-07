@@ -37,7 +37,7 @@ import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
 
 // ══════════════════════════════════════════════════════════════════════
-//  MOTOR SOLAR — NOAA / Meeus / Ladybug Tools
+//  MOTOR SOLAR
 // ══════════════════════════════════════════════════════════════════════
 const D2R = Math.PI/180, R2D = 180/Math.PI;
 
@@ -89,41 +89,25 @@ async function syncGiraffeSun(az, alt) {
   if(!views.length) return { ok:false, why:'no_views' };
 
   let safeView;
-  try {
-    safeView = JSON.parse(JSON.stringify(views[0]));
-  } catch {
-    safeView = {
-      id:        views[0].id,
-      name:      views[0].name   || '',
-      layerTree: views[0].layerTree || [],
-    };
-  }
+  try { safeView = JSON.parse(JSON.stringify(views[0])); }
+  catch { safeView = { id: views[0].id, name: views[0].name || '', layerTree: views[0].layerTree || [] }; }
 
   const patchedView = {
     ...safeView,
-    sun:        { ...(safeView.sun || {}), azimuth: az, altitude: alt },
+    sun: { ...(safeView.sun || {}), azimuth: az, altitude: alt },
     sunAzimuth: az,
     sunAltitude: alt,
   };
 
-  try {
-    await rpc.invoke('activateViewLayers', [patchedView]);
-    return { ok:true };
-  } catch(e) {
-    console.error('[KV SunPath] syncSombras:', e?.message);
-    return { ok:false, why:'error' };
-  }
+  try { await rpc.invoke('activateViewLayers', [patchedView]); return { ok:true }; }
+  catch(e) { return { ok:false, why:'error' }; }
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  HELPERS DE GEOMETRIA
+//  GEOMETRIA & HELPERS
 // ══════════════════════════════════════════════════════════════════════
-
 function local2geo(x, y, oLng, oLat) {
-  return [
-    oLng + x / (111320 * Math.cos(oLat*D2R)),
-    oLat + y / 111320,
-  ];
+  return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ];
 }
 
 function makeCircle(lat, lng, radiusM, steps=72) {
@@ -154,15 +138,7 @@ const L = {
   POLE:'sp-po', DOT:'sp-dt',
 };
 
-const rm    = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
-const rmAll = ()        => Promise.allSettled(Object.values(L).map(rm));
+const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
+const rmAll = () => Promise.allSettled(Object.values(L).map(rm));
 
 // ══════════════════════════════════════════════════════════════════════
-//  COMPASSO — anéis + radiais + rótulos
-// ══════════════════════════════════════════════════════════════════════
-async function plotCompassGround(lat, lng, radius) {
-  await rm(L.RING_H); await rm(L.RINGS);
-  await rm(L.AZ_C);   await rm(L.AZ_M);
-  await rm(L.LABELS);
-
-  const horizonPts
