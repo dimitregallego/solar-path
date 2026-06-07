@@ -35,9 +35,6 @@ import { createElement as h, useState, useEffect, useRef, useMemo }
   from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
-// Sem turf.js — toda a geometria é gerada com matemática pura para
-// evitar o erro "[object Object] is not valid JSON" causado por
-// propriedades internas do turf que não serializam corretamente via SDK
 
 // ══════════════════════════════════════════════════════════════════════
 //  MOTOR SOLAR — NOAA / Meeus / Ladybug Tools
@@ -85,25 +82,16 @@ function calcSun(lat, lng, doy, hr) {
 
 // ══════════════════════════════════════════════════════════════════════
 //  SYNC DE SOMBRAS — CORREÇÃO DO ERRO [object Object]
-//
-//  CAUSA: `...views[0]` espalhava o objeto view do Giraffe que contém
-//  Proxy, getters ou referências circulares → JSON.stringify falhava
-//  no SDK e retornava "[object Object]" em vez de JSON válido.
-//
-//  CORREÇÃO: JSON round-trip (parse(stringify())) clona apenas as
-//  partes plain-JSON do objeto, descartando tudo não-serializável.
 // ══════════════════════════════════════════════════════════════════════
 async function syncGiraffeSun(az, alt) {
   if(alt < -5) return { ok:false, why:'night' };
   const views = giraffeState.get('views') || [];
   if(!views.length) return { ok:false, why:'no_views' };
 
-  // JSON round-trip: garante objeto 100% serializável (sem Proxy/getter/Symbol)
   let safeView;
   try {
     safeView = JSON.parse(JSON.stringify(views[0]));
   } catch {
-    // Se falhou, usa versão mínima com apenas os campos essenciais
     safeView = {
       id:        views[0].id,
       name:      views[0].name   || '',
@@ -111,7 +99,6 @@ async function syncGiraffeSun(az, alt) {
     };
   }
 
-  // Injeta sun position em múltiplos formatos (Giraffe usará o que reconhecer)
   const patchedView = {
     ...safeView,
     sun:        { ...(safeView.sun || {}), azimuth: az, altitude: alt },
@@ -129,10 +116,9 @@ async function syncGiraffeSun(az, alt) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  HELPERS DE GEOMETRIA — pura matemática, sem turf.js
+//  HELPERS DE GEOMETRIA
 // ══════════════════════════════════════════════════════════════════════
 
-/** Converte metros locais → [lng, lat] (aprox. equiretangular, erro <0.5m para r<1km) */
 function local2geo(x, y, oLng, oLat) {
   return [
     oLng + x / (111320 * Math.cos(oLat*D2R)),
@@ -140,7 +126,6 @@ function local2geo(x, y, oLng, oLat) {
   ];
 }
 
-/** Gera um circle como array de coordenadas geográficas */
 function makeCircle(lat, lng, radiusM, steps=72) {
   const pts = [];
   for(let i=0; i<=steps; i++) {
@@ -150,12 +135,10 @@ function makeCircle(lat, lng, radiusM, steps=72) {
   return pts;
 }
 
-/** Feature GeoJSON limpa — apenas type/geometry/properties (sem metadata interna) */
 function feat(geomType, coords, props={}) {
   return { type:'Feature', geometry:{ type:geomType, coordinates:coords }, properties:props };
 }
 
-/** FeatureCollection simples */
 const fc = (features) => ({ type:'FeatureCollection', features });
 
 const seasons = lat => {
@@ -164,7 +147,6 @@ const seasons = lat => {
     sumLbl:S?'Verão (Dez)':'Verão (Jun)', winLbl:S?'Inverno (Jun)':'Inverno (Dez)' };
 };
 
-// IDs de camadas
 const L = {
   RING_H:'sp-rh', RINGS:'sp-rg', AZ_C:'sp-azc', AZ_M:'sp-azm',
   DOME_3D:'sp-d3', LABELS:'sp-lb',
@@ -176,17 +158,14 @@ const rm    = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catc
 const rmAll = ()        => Promise.allSettled(Object.values(L).map(rm));
 
 // ══════════════════════════════════════════════════════════════════════
-//  COMPASSO — anéis + radiais + rótulos (todos type:"line"/"symbol")
-//  Sem data-driven expressions numéricas → evita parsing errors no SDK
-//  Layers separados por estilo em vez de ['case',['get','xxx'],n1,n2]
+//  COMPASSO — anéis + radiais + rótulos
 // ══════════════════════════════════════════════════════════════════════
 async function plotCompassGround(lat, lng, radius) {
   await rm(L.RING_H); await rm(L.RINGS);
   await rm(L.AZ_C);   await rm(L.AZ_M);
   await rm(L.LABELS);
 
-  // ── Anéis de altitude: raio no chão = R·cos(alt°) ─────────────────
-  const horizonPts = makeCircle(lat, lng, radius);           // 0° — horizonte
+  const horizonPts = makeCircle(lat, lng, radius);           
   const innerRings = [];
   for(const alt of [10,20,30,40,50,60,70,80]) {
     const rr = radius * Math.cos(alt*D2R);
@@ -194,14 +173,12 @@ async function plotCompassGround(lat, lng, radius) {
     innerRings.push(feat('LineString', makeCircle(lat, lng, rr)));
   }
 
-  // Anel do horizonte — linha mais grossa/brilhante (camada separada)
   await rpc.invoke('addTempLayerGeoJSON', [
     L.RING_H, fc([feat('LineString', horizonPts)]),
     { type:'line', paint:{ 'line-color':'#ffffff','line-width':1.5,'line-opacity':0.35 },
       layout:{ 'line-cap':'round' } },
   ]);
 
-  // Demais anéis — linha fina
   if(innerRings.length) {
     await rpc.invoke('addTempLayerGeoJSON', [
       L.RINGS, fc(innerRings),
@@ -210,7 +187,6 @@ async function plotCompassGround(lat, lng, radius) {
     ]);
   }
 
-  // ── Linhas radiais de azimute ─────────────────────────────────────
   const cardLines = [], minorLines = [];
   for(let az=0; az<360; az+=10) {
     const ar = az*D2R;
@@ -218,7 +194,7 @@ async function plotCompassGround(lat, lng, radius) {
     const end   = local2geo(radius*Math.sin(ar),       radius*Math.cos(ar),       lng, lat);
     const line  = feat('LineString', [start, end]);
     if(az%90===0)     cardLines.push(line);
-    else if(az%30===0) cardLines.push(feat('LineString',[start,end]));  // intercardinals
+    else if(az%30===0) cardLines.push(feat('LineString',[start,end])); 
     else               minorLines.push(line);
   }
 
@@ -235,7 +211,6 @@ async function plotCompassGround(lat, lng, radius) {
     ]);
   }
 
-  // ── Rótulos cardeais + ângulos ────────────────────────────────────
   const lblR = radius * 1.13;
   const lblDefs = [
     {az:0,l:'N'},{az:30,l:'30°'},{az:60,l:'60°'},{az:90,l:'L'},
@@ -251,7 +226,7 @@ async function plotCompassGround(lat, lng, radius) {
     L.LABELS, fc(lblFeats),
     { type:'symbol',
       layout:{
-        'text-field': ['get','label'],   // ['get','xxx'] para text-field: OK no SDK
+        'text-field': ['get','label'],  
         'text-size': 11,
         'text-pitch-alignment': 'map',
         'text-rotation-alignment': 'map',
@@ -272,7 +247,7 @@ async function plotDome3D(lat, lng, radius) {
     for(let i=0; i<=72; i++) {
       const t=(i/72)*2*Math.PI;
       const [ln,la]=local2geo(rh*Math.sin(t),rh*Math.cos(t),lng,lat);
-      coords.push([ln,la,z]);   // coordenada 3D: Z = elevação do anel
+      coords.push([ln,la,z]);   // coordenada 3D verdadeira
     }
     rings.push(feat('LineString', coords));
   }
@@ -280,21 +255,14 @@ async function plotDome3D(lat, lng, radius) {
   await rpc.invoke('addTempLayerGeoJSON', [
     L.DOME_3D, fc(rings),
     { type:'line',
-      paint:{ 'line-color':'#ffffff','line-width':0.5,'line-opacity':0.12,'line-elevation':0 },
+      paint:{ 'line-color':'#ffffff','line-width':0.5,'line-opacity':0.12 },
       layout:{ 'line-cap':'round' },
     },
   ]);
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  ARCOS SOLARES 3D — LineString com Z + line-elevation
-//
-//  CORREÇÃO vs. versão do usuário:
-//  Antes: turf.buffer(segmento) → fill-extrusion = sólido
-//  Agora: LineString([lng,lat,Z]) → type:"line" = linha fina
-//
-//  fromProjected chamado SEQUENCIALMENTE (não Promise.all) para
-//  evitar race condition no mini-iframe-rpc que causava o erro.
+//  ARCOS SOLARES 3D (LINHAS FINAS LIMPAS)
 // ══════════════════════════════════════════════════════════════════════
 async function genArc3D(lat, lng, doy, radius) {
   const pts = [];
@@ -310,8 +278,6 @@ async function genArc3D(lat, lng, doy, radius) {
   }
   if(pts.length < 2) return null;
 
-  // Converter XY → geográfico via fromProjected
-  // SEQUENCIAL: evita race conditions no mini-iframe-rpc do SDK
   const geo = [];
   for(const p of pts) {
     try {
@@ -323,7 +289,8 @@ async function genArc3D(lat, lng, doy, radius) {
     }
   }
 
-  return feat('LineString', geo, { _baseHeight:0, _height:Math.max(...pts.map(p=>p.z)) });
+  // Removido o _baseHeight e _height para o motor ler estritamente os pontos Z da geometria
+  return feat('LineString', geo, {});
 }
 
 async function plotArcLine(id, arcFeat, color, width=2, opacity=0.8) {
@@ -332,7 +299,7 @@ async function plotArcLine(id, arcFeat, color, width=2, opacity=0.8) {
   await rpc.invoke('addTempLayerGeoJSON', [
     id, fc([arcFeat]),
     { type:'line',
-      paint:{ 'line-color':color,'line-width':width,'line-opacity':opacity,'line-elevation':0 },
+      paint:{ 'line-color':color,'line-width':width,'line-opacity':opacity },
       layout:{ 'line-cap':'round','line-join':'round' },
     },
   ]);
@@ -349,13 +316,15 @@ async function plotSunDot(lat, lng, doy, hr, radius) {
   try { [sLng,sLat]=await rpc.invoke('fromProjected',[[x,y],[lng,lat]]); }
   catch { [sLng,sLat]=local2geo(x,y,lng,lat); }
   const col=s.alt>20?'#F59E0B':s.alt>5?'#D97706':'#B45309';
+  
   // Mastro: line Z=0→elev
   await rpc.invoke('addTempLayerGeoJSON',[
     L.POLE, fc([feat('LineString',[[sLng,sLat,0],[sLng,sLat,elev]])]),
     { type:'line', paint:{'line-color':col,'line-width':1.5,'line-opacity':0.5,
-        'line-dasharray':[4,3],'line-elevation':0} },
+        'line-dasharray':[4,3]} },
   ]);
-  // Círculo solar: circle-pitch-alignment:'map'
+  
+  // Círculo solar
   await rpc.invoke('addTempLayerGeoJSON',[
     L.DOT, fc([feat('Point',[sLng,sLat,elev],{_baseHeight:elev,_height:elev+3})]),
     { type:'circle', paint:{'circle-color':col,'circle-radius':12,'circle-opacity':1,
@@ -365,7 +334,7 @@ async function plotSunDot(lat, lng, doy, hr, radius) {
 }
 
 // ══════════════════════════════════════════════════════════════════════
-//  CARTA SOLAR SVG — inline no painel, sem RPC (Ladybug-style)
+//  CARTA SOLAR SVG
 // ══════════════════════════════════════════════════════════════════════
 const SR=85, SCX=100, SCY=100;
 const sun2svg = (alt,az) => {
@@ -400,28 +369,22 @@ function MiniSolarChart({ lat, lng, doy, sunRes, seas }) {
     ),
     h('svg',{viewBox:'0 0 200 200',className:'w-full h-auto',style:{maxHeight:'196px'}},
       h('rect',{width:200,height:200,fill:'#080c12'}),
-      // Anéis de altitude
       ...[{r:SR,s:'#1e3a5f',w:1.2},{r:SR*Math.cos(30*D2R),s:'#162032',w:.7},{r:SR*Math.cos(60*D2R),s:'#162032',w:.7}]
         .map(({r,s,w},i)=>h('circle',{key:i,cx:SCX,cy:SCY,r:r.toFixed(1),stroke:s,strokeWidth:w,fill:'none'})),
-      // Rótulos de altitude
       h('text',{x:SCX+2,y:SCY-SR*Math.cos(30*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'30°'),
       h('text',{x:SCX+2,y:SCY-SR*Math.cos(60*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'60°'),
-      // Radiais de azimute
       ...[...Array(12)].map((_,i)=>{
         const ar=i*30*D2R,card=i%3===0;
         return h('line',{key:i,x1:SCX,y1:SCY,
           x2:(SCX+SR*Math.sin(ar)).toFixed(1),y2:(SCY-SR*Math.cos(ar)).toFixed(1),
           stroke:card?'#1e3a5f':'#0f172a',strokeWidth:card?.7:.35});
       }),
-      // Rótulos cardeais
       ...[{t:'N',x:SCX,y:9},{t:'S',x:SCX,y:197},{t:'L',x:194,y:SCY+3},{t:'O',x:6,y:SCY+3}]
         .map(({t,x,y})=>h('text',{key:t,x,y,textAnchor:'middle',fill:'#334155',fontSize:8,fontFamily:'Hind',fontWeight:'600'},t)),
-      // Trajetórias (linhas finas Ladybug-style)
       paths.sum&&h('path',{d:paths.sum,stroke:'#F59E0B',strokeWidth:1.8,fill:'none',opacity:.8}),
       paths.win&&h('path',{d:paths.win,stroke:'#38BDF8',strokeWidth:1.8,fill:'none',opacity:.75}),
       paths.eq &&h('path',{d:paths.eq, stroke:'#34D399',strokeWidth:1.8,fill:'none',opacity:.75}),
       paths.tod&&h('path',{d:paths.tod,stroke:'#ffffff',strokeWidth:2,  fill:'none',opacity:.95}),
-      // Ponto solar
       dot&&h('g',null,
         h('line',{x1:SCX,y1:SCY,x2:dot[0].toFixed(1),y2:dot[1].toFixed(1),
           stroke:'#F59E0B',strokeWidth:.5,opacity:.3,strokeDasharray:'2,2'}),
@@ -456,7 +419,7 @@ function SolarApp() {
   const [hr, setHr ]=useState(INIT.hr);
   const [doy,setDoy]=useState(INIT.doy);
   const [rad,setRad]=useState(INIT.radius);
-  const [showChart,setShowChart]=useState(false);   // padrão OFF
+  const [showChart,setShowChart]=useState(false);   
   const [syncSt,setSyncSt]=useState('idle');
 
   const seas    = useMemo(()=>seasons(lat),[lat]);
@@ -465,10 +428,6 @@ function SolarApp() {
   const syncRef=useRef(null), dotRef=useRef(null);
   const fixGen=useRef(0), todGen=useRef(0);
 
-  // ── Ef.1: buscar centro do mapa (uma vez ao montar) ───────────────
-  // CORREÇÃO: removido giraffeState.addListener(['mapBounds'])
-  // pois 'mapBounds' não é uma chave válida no estado do Giraffe e
-  // disparava mensagens internas que o SDK não conseguia parsear.
   useEffect(()=>{
     (async()=>{
       try {
@@ -481,7 +440,6 @@ function SolarApp() {
     })();
   },[]);
 
-  // ── Ef.2: sync de sombras (debounce 120ms) ────────────────────────
   useEffect(()=>{
     if(syncRef.current) clearTimeout(syncRef.current);
     syncRef.current=setTimeout(async()=>{
@@ -492,7 +450,6 @@ function SolarApp() {
     return ()=>clearTimeout(syncRef.current);
   },[sunNow]);
 
-  // ── Ef.3: bolinha do sol (debounce 80ms, só quando mapa ligado) ───
   useEffect(()=>{
     if(!showChart) return;
     if(dotRef.current) clearTimeout(dotRef.current);
@@ -500,10 +457,8 @@ function SolarApp() {
     return ()=>clearTimeout(dotRef.current);
   },[lat,lng,doy,hr,rad,showChart]);
 
-  // ── Ef.4: desligar mapa ───────────────────────────────────────────
   useEffect(()=>{ if(!showChart) rmAll(); },[showChart]);
 
-  // ── Ef.5: compasso + gaiola 3D (lat/lng/rad) ─────────────────────
   useEffect(()=>{
     if(!showChart) return;
     (async()=>{
@@ -512,15 +467,11 @@ function SolarApp() {
     })();
   },[lat,lng,rad,showChart]);
 
-  // ── Ef.6: arcos fixos (solstícios+equinócio) — SEQUENCIAIS ───────
-  // CORREÇÃO: era Promise.all (3 RPCs simultâneos) → race condition no
-  // mini-iframe-rpc → mensagens cruzadas → "[object Object]" parse error
   useEffect(()=>{
     if(!showChart) return;
     const gen=++fixGen.current;
     const t=setTimeout(async()=>{
       if(gen!==fixGen.current) return;
-      // Sequencial: gera e plota um arco de cada vez
       const sumF=await genArc3D(lat,lng,seas.sum,rad); if(gen!==fixGen.current)return;
       await plotArcLine(L.SUM,sumF,'#F59E0B',2,.75);
       const winF=await genArc3D(lat,lng,seas.win,rad); if(gen!==fixGen.current)return;
@@ -531,7 +482,6 @@ function SolarApp() {
     return ()=>{ clearTimeout(t); fixGen.current=gen+1; };
   },[lat,lng,rad,seas,showChart]);
 
-  // ── Ef.7: arco do dia atual (debounce 400ms) ─────────────────────
   useEffect(()=>{
     if(!showChart) return;
     const gen=++todGen.current;
@@ -543,7 +493,6 @@ function SolarApp() {
     return ()=>{ clearTimeout(t); todGen.current=gen+1; };
   },[lat,lng,doy,rad,showChart]);
 
-  // ── Ef.8: cleanup ─────────────────────────────────────────────────
   useEffect(()=>()=>rmAll(),[]);
 
   const syncInfo={
@@ -559,7 +508,6 @@ function SolarApp() {
   const eqSub   =doy===266?'23 Set':'20 Mar';
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
-    // Header
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
       h('div',null,
         h('h1',{className:'text-base font-semibold text-white'},'☀ Sun Path 3D · KV'),
@@ -570,10 +518,8 @@ function SolarApp() {
 
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
 
-      // Carta SVG
       h(MiniSolarChart,{lat,lng,doy,sunRes:sunNow,seas}),
 
-      // Presets
       h('div',{className:'grid grid-cols-3 gap-2'},
         ...[
           {e:'☀',l:'Verão',   ac:doy===seas.sum, bc:'amber', fn:()=>setDoy(seas.sum),   sub:seas.sumLbl.split(' ')[1]},
@@ -592,7 +538,6 @@ function SolarApp() {
         }),
       ),
 
-      // Sliders
       h('div',{className:'bg-[#111827] rounded-lg border border-slate-800 p-3 flex flex-col gap-4'},
         ...[
           {l:'Horário', v:fmtH(hr), min:0,  max:23.99,step:.25,val:hr,  fn:v=>setHr(+v)},
@@ -607,7 +552,6 @@ function SolarApp() {
         )),
       ),
 
-      // Toggle
       h('div',{className:'flex items-center justify-between p-3 bg-[#111827] rounded-lg border border-slate-800'},
         h('div',null,
           h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'),
