@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG10]</title>
+  <title>Sun Path 3D · KV [vG11]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -280,7 +280,9 @@ function SolarApp() {
 
   useEffect(()=>()=>Object.values(L).forEach(rm),[]);
 
-  const handleBake = () => {
+  const handleBake = async () => {
+    if (isBaking) return;
+    setIsBaking(true);
     try {
       const pathFeats = generateAnalyticMesh(lat, lng, rad, doy);
       const compassFeats = [];
@@ -301,32 +303,24 @@ function SolarApp() {
       
       pathFeats.forEach(f => f.properties.layer = "Sun Path 3D Mesh");
       
-      // O SEGREDO DO BAKE SEGURO E AUTOMÁTICO 3D:
-      // Renomeamos as propriedades para os nomes nativos que o Giraffe espera ler para extrusão.
+      // O SEGREDO DO GEOSAMPA: Injeta o GeoJSON direto no Giraffe!
       const safeFeats = JSON.parse(JSON.stringify([...compassFeats, ...pathFeats])).map(feat => {
         if (feat.properties) {
           feat.properties.baseHeight = feat.properties._baseHeight;
           feat.properties.height = feat.properties._height;
-          // Garantimos que a cor nativa também seja reconhecida
           feat.properties.fill = feat.properties.color;
         }
         return feat;
       });
       
-      const geojson = { type: "FeatureCollection", features: safeFeats };
-      const blob = new Blob([JSON.stringify(geojson)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `SunPath_3D_Bake.geojson`;
-      a.click();
-      URL.revokeObjectURL(url);
+      await rpc.invoke('updateGeoJSONLayerContents', ['☀ Sun Path 3D (Baked)', { type: 'FeatureCollection', features: safeFeats }]);
       
-      alert('Arquivo GeoJSON gerado! Arraste o arquivo "SunPath_3D_Bake.geojson" diretamente para a tela do Giraffe. Ele será extrudado em 3D automaticamente.');
+      alert('Geometria 3D fixada no projeto com sucesso!');
     } catch (e) {
       console.error(e);
-      alert('Erro ao gerar a geometria.');
+      alert('Erro ao salvar no projeto. Verifique o console ou a conexão.');
     }
+    setIsBaking(false);
   };
 
   const syncInfo={ ok: {msg:'✓ Sombras Sincronizadas', cls:'text-emerald-400'}, syncing: {msg:'⟳ Calculando...', cls:'text-amber-400'}, night: {msg:'☾ Sol abaixo do horizonte', cls:'text-slate-500'}, no_views:{msg:'⚠ Crie uma View no projeto', cls:'text-red-400'}, error: {msg:'⚠ Erro — ver console (F12)', cls:'text-red-400'}, idle: {msg:'', cls:''} }[syncSt]||{msg:'',cls:''};
@@ -334,7 +328,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG10]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG11]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
@@ -354,9 +348,9 @@ function SolarApp() {
           h('button',{className:`toggle ${showChart?'on':''}`,onClick:()=>setShowChart(v=>!v)})
         ),
         h('button', {
-          className: 'w-full py-2 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors',
+          className: `w-full py-2 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors ${isBaking ? 'opacity-50 cursor-wait' : ''}`,
           onClick: handleBake
-        }, '⇩ Baixar e Fixar (Bake)')
+        }, isBaking ? 'Assando Geometria 3D...' : '⇩ Fixar Carta no Projeto (Bake)')
       )
     )
   );
