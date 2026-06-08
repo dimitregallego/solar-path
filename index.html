@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG13]</title>
+  <title>Sun Path 3D · KV [vG14]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -92,30 +92,27 @@ async function syncGiraffeSun(az, alt) {
   catch(e) { return { ok:false, why:'error' }; }
 }
 
-// ─── FATIADOR DE LINHAS 3D ───────────────────────────────────────────────────
+// ─── FATIADOR DE LINHAS 3D (SEM HEIGHT PARA NÃO VIRAR PAREDE) ────────────────
 function local2geo(x, y, oLng, oLat) { return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ]; }
 const fc = (features) => ({ type:'FeatureCollection', features });
 const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
 
-// Pega a linha contínua e quebra em micro-segmentos com baseHeight individual
 function segmentLine3D(coords3D, properties) {
   const segments = [];
   for (let i = 0; i < coords3D.length - 1; i++) {
     const p1 = coords3D[i], p2 = coords3D[i+1];
     if (p1[2] < -1 && p2[2] < -1) continue; 
     
-    // Calcula a altura média desse pedacinho específico
     const z = (p1[2] + p2[2]) / 2;
     
-    // Cria um pedaço 2D
-    const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
+    // Mantemos as coordenadas X, Y, Z originais na geometria da linha
+    const line = turf.lineString([p1, p2]);
     
-    // Injeta as propriedades de flutuação no pedaço
+    // Injetamos APENAS a altura de flutuação (baseHeight). NENHUM height.
     line.properties = { 
       ...properties, 
       _baseHeight: z, 
-      baseHeight: z,
-      height: z // height igual ao baseHeight para ter "zero" de espessura (sem sombra)
+      baseHeight: z
     };
     segments.push(line);
   }
@@ -126,7 +123,6 @@ function generateAnalyticMesh(lat, lng, radius, currentDoy) {
   const features = [];
   const seasonSteps = lat < 0 ? [355, 17, 46, 79, 107, 137, 172, 199, 229, 266, 292, 321] : [172, 199, 229, 266, 292, 321, 355, 17, 46, 79, 107, 137];
   
-  // Arcos Mensais Fatiados
   for (let m = 0; m < 12; m++) {
     const doy = seasonSteps[m];
     const coords3D = [];
@@ -143,7 +139,6 @@ function generateAnalyticMesh(lat, lng, radius, currentDoy) {
     }
   }
 
-  // Analemas em 8 Fatiados
   for (let h = 8; h <= 18; h += 1) {
     const coords3D = [];
     for (let doy = 1; doy <= 365; doy += 6) {
@@ -193,7 +188,7 @@ async function plotSunDotAndPole(lat, lng, doy, hr, radius) {
     } 
   }]);
   
-  const dotPoint = turf.point([sLng, sLat, coordZ], { color: col, _baseHeight: coordZ, baseHeight: coordZ });
+  const dotPoint = turf.point([sLng, sLat, coordZ], { color: col, baseHeight: coordZ, _baseHeight: coordZ });
   await rpc.invoke("addTempLayerGeoJSON", [L.DOT, fc([dotPoint]), { 
     type:"circle", 
     paint: { 
@@ -322,17 +317,16 @@ function SolarApp() {
       const compassFeats = [];
       const center = [lng, lat];
       
-      // Compasso no chão (Z=0) fatiado garantidamente como linha 2D no Bake
       for (let r = rad * 0.33; r <= rad; r += rad * 0.33) {
         const ring = [];
         for (let angle = 0; angle <= 360; angle += 5) ring.push(turf.destination(turf.point(center), r/1000, angle, {units: 'kilometers'}).geometry.coordinates);
-        const line = turf.lineString(ring, { color: '#ffffff', width: 1, _opacity: 0.2, layer: "Sun Path Compass", _baseHeight: 0, baseHeight: 0, height: 0 });
+        const line = turf.lineString(ring, { color: '#ffffff', width: 1, _opacity: 0.2, layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
         compassFeats.push(line);
       }
       for (let angle = 0; angle < 360; angle += 15) {
         const far = turf.destination(turf.point(center), rad/1000, angle, {units: 'kilometers'}).geometry.coordinates;
         const isMain = angle % 90 === 0;
-        const line = turf.lineString([center, far], { color: '#ffffff', width: isMain ? 1.5 : 1, _opacity: isMain ? 0.4 : 0.15, layer: "Sun Path Compass", _baseHeight: 0, baseHeight: 0, height: 0 });
+        const line = turf.lineString([center, far], { color: '#ffffff', width: isMain ? 1.5 : 1, _opacity: isMain ? 0.4 : 0.15, layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
         compassFeats.push(line);
       }
       
@@ -341,12 +335,15 @@ function SolarApp() {
         if (feat.properties) {
           feat.properties.fill = feat.properties.color;
           feat.properties.stroke = feat.properties.color;
+          // REMOVENDO QUALQUER MENÇÃO A HEIGHT (EVITA CRIAR PAREDES)
+          delete feat.properties.height;
+          delete feat.properties._height;
         }
         return feat;
       });
       
-      await rpc.invoke('updateGeoJSONLayerContents', ['☀ Sun Path 3D (Segments)', { type: 'FeatureCollection', features: safeFeats }]);
-      alert('Linhas Fatiadas 3D fixadas no projeto com sucesso!');
+      await rpc.invoke('updateGeoJSONLayerContents', ['☀ Sun Path 3D (Lines)', { type: 'FeatureCollection', features: safeFeats }]);
+      alert('Linhas 3D fixadas no projeto com sucesso!');
     } catch (e) {
       console.error(e);
       alert('Erro ao salvar no projeto. Verifique o console ou a conexão.');
@@ -359,7 +356,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG13]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG14]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
@@ -381,7 +378,7 @@ function SolarApp() {
         h('button', {
           className: `w-full py-2 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors ${isBaking ? 'opacity-50 cursor-wait' : ''}`,
           onClick: handleBake
-        }, isBaking ? 'Assando Fatias 3D...' : '⇩ Fixar Carta (Fatiada em 3D)')
+        }, isBaking ? 'Assando Linhas 3D...' : '⇩ Fixar Carta (Linhas Flutuantes)')
       )
     )
   );
