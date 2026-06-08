@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG12]</title>
+  <title>Sun Path 3D · KV [vG13]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -99,13 +99,16 @@ const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{}
 
 function extrudeLine3D(coords3D, properties) {
   const segments = [];
+  const HALF = 0.02;  // 2cm de cada lado = 4cm total de espessura (quase linha)
   for (let i = 0; i < coords3D.length - 1; i++) {
     const p1 = coords3D[i], p2 = coords3D[i+1];
     if (p1[2] < -1 && p2[2] < -1) continue; 
     const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
-    const poly = turf.buffer(line, 0.08, { units: 'meters' });
+    const poly = turf.buffer(line, 0.05, { units: 'meters' });
     if (poly) {
-      poly.properties = { ...properties, _baseHeight: Math.max(0, Math.min(p1[2], p2[2])), _height: Math.max(0.1, Math.max(p1[2], p2[2]) + 0.08) };
+      // Altura centrada no Z médio do segmento — espessura fixa de 4cm
+      const midZ = Math.max(0, (p1[2] + p2[2]) / 2);
+      poly.properties = { ...properties, _baseHeight: Math.max(0, midZ - HALF), _height: midZ + HALF };
       segments.push(poly);
     }
   }
@@ -292,13 +295,13 @@ function SolarApp() {
         const ring = [];
         for (let angle = 0; angle <= 360; angle += 5) ring.push(turf.destination(turf.point(center), r/1000, angle, {units: 'kilometers'}).geometry.coordinates);
         const poly = turf.buffer(turf.lineString(ring), 0.15, {units: 'meters'});
-        if(poly) { poly.properties = { color: '#ffffff', _opacity: 0.2, _baseHeight: 0, _height: 0.08, layer: "Sun Path Compass" }; compassFeats.push(poly); }
+        if(poly) { poly.properties = { color: '#ffffff', _opacity: 0.2, _baseHeight: 0, _height: 0.04, layer: "Sun Path Compass" }; compassFeats.push(poly); }
       }
       for (let angle = 0; angle < 360; angle += 15) {
         const far = turf.destination(turf.point(center), rad/1000, angle, {units: 'kilometers'}).geometry.coordinates;
         const isMain = angle % 90 === 0;
         const poly = turf.buffer(turf.lineString([center, far]), isMain ? 0.25 : 0.10, {units: 'meters'});
-        if(poly) { poly.properties = { color: '#ffffff', _opacity: isMain ? 0.4 : 0.15, _baseHeight: 0, _height: 0.08, layer: "Sun Path Compass" }; compassFeats.push(poly); }
+        if(poly) { poly.properties = { color: '#ffffff', _opacity: isMain ? 0.4 : 0.15, _baseHeight: 0, _height: 0.04, layer: "Sun Path Compass" }; compassFeats.push(poly); }
       }
       
       pathFeats.forEach(f => f.properties.layer = "Sun Path 3D Mesh");
@@ -312,13 +315,19 @@ function SolarApp() {
         return feat;
       });
       
-      const layerName = '☀ Sun Path 3D (Baked)';
+      const layerName = 'Sun Path 3D Baked';
       
-      // 1. Salva a geometria (cria o layer se não existir)
+      // 1. Deletar layer antigo (se existir de sessão anterior) — evita "Layer not found in map"
+      try { await rpc.invoke('deleteProjectLayer', [layerName]); } catch {}
+      // Esperar propagação da deleção no motor do Giraffe
+      await new Promise(r => setTimeout(r, 500));
+      
+      // 2. Criar layer fresco com geometria
       await rpc.invoke('updateGeoJSONLayerContents', [layerName, { type: 'FeatureCollection', features: safeFeats }]);
+      // Esperar o layer ser registrado no mapa
+      await new Promise(r => setTimeout(r, 800));
       
-      // 2. Aplica o estilo fill-extrusion automaticamente via updateLayerStyle
-      // Isso resolve o problema de ter que configurar manualmente na tabela do layer
+      // 3. Aplicar estilo fill-extrusion automaticamente
       try {
         await rpc.invoke('updateLayerStyle', [layerName, {
           type: 'fill-extrusion',
@@ -329,9 +338,9 @@ function SolarApp() {
             'fill-extrusion-opacity': 0.7,
           },
         }]);
-        console.log('[SunPath] ✓ updateLayerStyle aplicado com sucesso');
+        console.log('[SunPath] ✓ updateLayerStyle aplicado');
       } catch(styleErr) {
-        console.warn('[SunPath] updateLayerStyle falhou (configure manualmente no layer):', styleErr?.message);
+        console.warn('[SunPath] updateLayerStyle falhou (estilo pode precisar config manual):', styleErr?.message);
       }
       
       alert('✓ Geometria 3D fixada e estilizada no projeto!');
@@ -347,7 +356,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG12]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG13]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
