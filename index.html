@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG5]</title>
+  <title>Sun Path 3D · KV [vG6]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -36,6 +36,12 @@ const COLOR = {
 };
 
 const L = { PATHS:'sp-paths', COMPASS:'sp-compass', LABELS:'sp-labels', DOT:'sp-dot', POLE:'sp-pole' };
+
+// A FUNÇÃO QUE FALTAVA NA VERSÃO ANTERIOR!
+const seasons = lat => {
+  const S = lat < 0;
+  return { sum: S?355:172, win: S?172:355, eqMar: 79, eqSep: 266, sumLbl: S?'Verão (Dez)':'Verão (Jun)', winLbl: S?'Inverno (Jun)':'Inverno (Dez)' };
+};
 
 // ─── MATEMÁTICA SOLAR ────────────────────────────────────────────────────────
 function julianDay(doy, hr, yr=2000) {
@@ -99,9 +105,9 @@ function extrudeLine3D(coords3D, properties) {
     const p1 = coords3D[i], p2 = coords3D[i+1];
     if (p1[2] < -1 && p2[2] < -1) continue; 
     const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
-    const poly = turf.buffer(line, 0.25, { units: 'meters' }); // 25cm thickness
+    const poly = turf.buffer(line, 0.35, { units: 'meters' }); // Linhas de 35cm para visibilidade
     if (poly) {
-      poly.properties = { ...properties, _baseHeight: Math.max(0, Math.min(p1[2], p2[2])), _height: Math.max(0.1, Math.max(p1[2], p2[2]) + 0.3) };
+      poly.properties = { ...properties, _baseHeight: Math.max(0, Math.min(p1[2], p2[2])), _height: Math.max(0.1, Math.max(p1[2], p2[2]) + 0.35) };
       segments.push(poly);
     }
   }
@@ -158,13 +164,13 @@ async function plotSunDotAndPole(lat, lng, doy, hr, radius) {
   const col = sun.alt>20 ? COLOR.SUN[1] : COLOR.SUN[0];
   
   // Mastro flutuante 3D
-  const polePoly = turf.buffer(turf.lineString([[sLng, sLat], [sLng, sLat]]), 0.4, { units: 'meters' });
-  polePoly.properties = { color: col, _baseHeight: 0, _height: coordZ, _opacity: 0.5 };
+  const polePoly = turf.buffer(turf.lineString([[sLng, sLat], [sLng, sLat]]), 0.6, { units: 'meters' });
+  polePoly.properties = { color: col, _baseHeight: 0, _height: coordZ, _opacity: 0.6 };
   await rpc.invoke("addTempLayerGeoJSON", [L.POLE, fc([polePoly]), { type: "fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"] } }]);
   
   // Bolinha Solar 3D
-  const dotPoly = turf.buffer(turf.point([sLng, sLat]), 3.5, { units: 'meters' });
-  dotPoly.properties = { color: col, _baseHeight: coordZ, _height: coordZ + 3.5, _opacity: 1 };
+  const dotPoly = turf.buffer(turf.point([sLng, sLat]), 4.0, { units: 'meters' });
+  dotPoly.properties = { color: col, _baseHeight: coordZ, _height: coordZ + 4.0, _opacity: 1 };
   await rpc.invoke("addTempLayerGeoJSON", [L.DOT, fc([dotPoly]), { type:"fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"] } }]);
 }
 
@@ -205,8 +211,6 @@ function buildArcPath(lat,lng,doy) {
   }
   return pts.join('');
 }
-
-const seasons = lat => { const S=lat<0; return { sum:S?355:172, win:S?172:355, eqMar:79, eqSep:266, sumLbl:S?'Verão (Dez)':'Verão (Jun)', winLbl:S?'Inverno (Jun)':'Inverno (Dez)' }; };
 
 function MiniSolarChart({ lat, lng, doy, sunRes, seas }) {
   const paths = useMemo(()=>({ sum: buildArcPath(lat,lng,seas.sum), win: buildArcPath(lat,lng,seas.win), eq: buildArcPath(lat,lng,seas.eqMar), tod: buildArcPath(lat,lng,doy) }),[lat,lng,doy,seas]);
@@ -266,3 +270,44 @@ function SolarApp() {
   useEffect(()=>{ if(!showChart) { Object.values(L).forEach(rm); } },[showChart]);
 
   useEffect(()=>{
+    if(!showChart) return; const gen=++fixGen.current;
+    const t=setTimeout(async()=>{
+      if(gen!==fixGen.current) return;
+      await plotCompassGround(lat,lng,rad);
+      await plotAnalyticWireframes(lat, lng, rad, doy);
+    },300); return ()=>{ clearTimeout(t); fixGen.current=gen+1; };
+  },[lat,lng,rad,doy,showChart]);
+
+  useEffect(()=>()=>Object.values(L).forEach(rm),[]);
+
+  const syncInfo={ ok: {msg:'✓ Sombras Sincronizadas', cls:'text-emerald-400'}, syncing: {msg:'⟳ Calculando...', cls:'text-amber-400'}, night: {msg:'☾ Sol abaixo do horizonte', cls:'text-slate-500'}, no_views:{msg:'⚠ Crie uma View no projeto', cls:'text-red-400'}, error: {msg:'⚠ Erro — ver console (F12)', cls:'text-red-400'}, idle: {msg:'', cls:''} }[syncSt]||{msg:'',cls:''};
+  const eqActive=doy===79||doy===266; const eqSub=doy===266?'23 Set':'20 Mar';
+
+  return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
+    h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG6]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
+    ),
+    h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
+      h(MiniSolarChart,{lat,lng,doy,sunRes:sunNow,seas}),
+      h('div',{className:'grid grid-cols-3 gap-2'},
+        ...[{e:'☀',l:'Verão', ac:doy===seas.sum, bc:'amber', fn:()=>setDoy(seas.sum), sub:seas.sumLbl.split(' ')[1]}, {e:'❄',l:'Inverno', ac:doy===seas.win, bc:'sky', fn:()=>setDoy(seas.win), sub:seas.winLbl.split(' ')[1]}, {e:'◎',l:'Equinócio',ac:eqActive, bc:'emerald',fn:()=>setDoy(d=>d===79?266:79), sub:eqSub}].map(({e,l,ac,bc,fn,sub})=>{
+          const C={amber:{b:'border-amber-500/25',t:'text-amber-400',bg:'bg-amber-500/10'}, sky: {b:'border-sky-500/25', t:'text-sky-400', bg:'bg-sky-500/10'}, emerald:{b:'border-emerald-500/25',t:'text-emerald-400',bg:'bg-emerald-500/10'}}[bc];
+          return h('button',{key:l,onClick:fn, className:`flex flex-col items-center py-2 px-1 rounded border transition-all ${C.b} ${ac?C.bg:'bg-transparent hover:bg-white/[.02]'}`}, h('span',{className:'text-sm leading-none'},e), h('span',{className:`text-[10px] font-semibold ${C.t}`},l), h('span',{className:'text-[9px] text-slate-600'},sub));
+        })
+      ),
+      h('div',{className:'bg-[#111827] rounded-lg border border-slate-800 p-3 flex flex-col gap-4'},
+        ...[{l:'Horário', v:fmtH(hr), min:0, max:23.99,step:.25,val:hr, fn:v=>setHr(+v)}, {l:'Data', v:fmtD(doy),min:1, max:365, step:1, val:doy, fn:v=>setDoy(+v)}, {l:'Raio', v:rad+'m', min:50, max:500, step:10, val:rad, fn:v=>setRad(+v)}].map(({l,v,min,max,step,val,fn})=>h('div',{key:l}, h('div',{className:'flex justify-between text-[11px] mb-2'}, h('span',{className:'text-slate-400'},l), h('span',{className:'text-amber-400'},v)), h('input',{type:'range',className:'kv-slider',min,max,step,value:val,onChange:e=>fn(e.target.value)})))
+      ),
+      h('div',{className:'flex items-center justify-between p-3 bg-[#111827] rounded-lg border border-slate-800 mb-1'},
+        h('div',null, h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)')),
+        h('button',{className:`toggle ${showChart?'on':''}`,onClick:()=>setShowChart(v=>!v)})
+      )
+    )
+  );
+}
+
+createRoot(document.getElementById('root')).render(h(SolarApp));
+</script>
+</body>
+</html>
