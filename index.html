@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG20]</title>
+  <title>Sun Path 3D · KV [vG21]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -80,7 +80,6 @@ function calcSun(lat, lng, doy, hr) {
   return { alt, az, sn, day: alt>-0.83 };
 }
 
-// SINCRONIA INTELIGENTE: Preserva o estado das camadas atuais do usuário
 async function syncGiraffeSun(az, alt) {
   if(alt < -5) return { ok:false, why:'night' };
   const views = giraffeState.get('views') || [];
@@ -88,7 +87,6 @@ async function syncGiraffeSun(az, alt) {
   
   const activeIds = giraffeState.get('activeLayerIds') || [];
   let safeView;
-  
   try { safeView = JSON.parse(JSON.stringify(views[0])); }
   catch { safeView = { id: views[0].id, name: views[0].name || '', layerTree: [] }; }
   
@@ -102,12 +100,11 @@ async function syncGiraffeSun(az, alt) {
   if(safeView.layerTree) patchTree(safeView.layerTree);
 
   const patchedView = { ...safeView, sun: { ...(safeView.sun || {}), azimuth: az, altitude: alt }, sunAzimuth: az, sunAltitude: alt };
-  
   try { await rpc.invoke('activateViewLayers', [patchedView]); return { ok:true }; }
   catch(e) { return { ok:false, why:'error' }; }
 }
 
-// ─── FATIADOR DE LINHAS 3D (SEM HEIGHT, COM STROKE PARA COR) ─────────────────
+// ─── GEOMETRIA TEMPORÁRIA ────────────────────────────────────────────────────
 function local2geo(x, y, oLng, oLat) { return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ]; }
 const fc = (features) => ({ type:'FeatureCollection', features });
 const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
@@ -171,6 +168,38 @@ async function plotAnalyticWireframes(lat, lng, radius, currentDoy) {
   }]);
 }
 
+// ─── SOL (ESFERA) E ARCO DO DIA (EXTRUSÃO 3D TEMPORÁRIA) ───────────────────────
+async function plotDailyArc(lat, lng, doy, radius) {
+  await rm(L.DAYARC);
+  const coords3D = [];
+  for (let h = 0; h <= 24; h += 0.12) {
+    const s = calcSun(lat, lng, doy, h); if (!s.day && s.alt < -1) continue;
+    const a = s.alt*D2R, z = s.az*D2R;
+    const [ln, la] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
+    coords3D.push([ln, la, Math.max(0, radius*Math.sin(a))]);
+  }
+  if (coords3D.length < 2) return;
+  
+  const polys = [];
+  for (let i = 0; i < coords3D.length - 1; i++) {
+    const p1 = coords3D[i], p2 = coords3D[i+1];
+    if (p1[2] < -1 && p2[2] < -1) continue; 
+    const z = (p1[2] + p2[2]) / 2;
+    const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
+    const poly = turf.buffer(line, 0.5, { units: 'meters' });
+    if(poly) {
+      poly.properties = { color: '#F59E0B', baseHeight: z, height: z + 0.6, _opacity: 0.95 };
+      polys.push(poly);
+    }
+  }
+  if (!polys.length) return;
+  
+  await rpc.invoke('addTempLayerGeoJSON', [L.DAYARC, fc(polys), {
+    type: 'fill-extrusion',
+    paint: { 'fill-extrusion-color': ['get', 'color'], 'fill-extrusion-base': ['get', 'baseHeight'], 'fill-extrusion-height': ['get', 'height'], 'fill-extrusion-opacity': ['get', '_opacity'] }
+  }]);
+}
+
 async function plotSunDotAndPole(lat, lng, doy, hr, radius) {
   await rm(L.DOT); await rm(L.POLE);
   const sun = calcSun(lat, lng, doy, hr); if(!sun.day) return;
@@ -179,19 +208,24 @@ async function plotSunDotAndPole(lat, lng, doy, hr, radius) {
   const [sLng, sLat] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
   const col = sun.alt>20 ? COLOR.SUN[1] : COLOR.SUN[0];
   
-  // SOL e MASTRO temporários forçados em Extrusão (Cilindros) para 3D real infalível
-  const polePoly = turf.buffer(turf.point([sLng, sLat]), 0.6, {units: 'meters'});
-  polePoly.properties = { color: col, baseHeight: 0, height: coordZ, _opacity: 0.6 };
+  const polePoly = turf.buffer(turf.point([sLng, sLat]), 0.4, {units: 'meters'});
+  polePoly.properties = { color: col, baseHeight: 0, height: coordZ, _opacity: 0.5 };
   await rpc.invoke("addTempLayerGeoJSON", [L.POLE, fc([polePoly]), { 
     type: "fill-extrusion", 
     paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "baseHeight"], "fill-extrusion-height": ["get", "height"], "fill-extrusion-opacity": ["get", "_opacity"] } 
   }]);
   
-  const dotPoly = turf.buffer(turf.point([sLng, sLat]), 3.5, {units: 'meters'});
-  dotPoly.properties = { color: col, baseHeight: coordZ, height: coordZ + 3.5, _opacity: 1 };
-  await rpc.invoke("addTempLayerGeoJSON", [L.DOT, fc([dotPoly]), { 
-    type:"fill-extrusion", 
-    paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "baseHeight"], "fill-extrusion-height": ["get", "height"], "fill-extrusion-opacity": ["get", "_opacity"] } 
+  // Substitui cilindro por Circle nativo orientado à viewport (Esfera Perfeita Visual)
+  const dotPoint = turf.point([sLng, sLat, coordZ], { color: col });
+  await rpc.invoke("addTempLayerGeoJSON", [L.DOT, fc([dotPoint]), { 
+    type:"circle", 
+    paint: { 
+      "circle-color": ["get", "color"], 
+      "circle-radius": 14, 
+      "circle-pitch-alignment": "viewport",
+      "circle-stroke-width": 2, 
+      "circle-stroke-color": "#ffffff" 
+    } 
   }]);
 }
 
@@ -227,25 +261,7 @@ async function plotCompassGround(lat, lng, radius) {
   await rpc.invoke("addTempLayerGeoJSON", [L.LABELS, fc(labels), { type:"symbol", layout:{ "text-field":["get","label"], "text-size":12, "text-pitch-alignment":"map", "text-rotation-alignment":"map" }, paint:{ "text-color":"#94a3b8", "text-halo-color":"#000000", "text-halo-width":1.5 } }]);
 }
 
-async function plotDailyArc(lat, lng, doy, radius) {
-  await rm(L.DAYARC);
-  const coords3D = [];
-  for (let h = 0; h <= 24; h += 0.12) {
-    const s = calcSun(lat, lng, doy, h); if (!s.day && s.alt < -1) continue;
-    const a = s.alt*D2R, z = s.az*D2R;
-    const [ln, la] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
-    coords3D.push([ln, la, Math.max(0, radius*Math.sin(a))]);
-  }
-  if (coords3D.length < 2) return;
-  const segs = segmentLine3D(coords3D, { color: '#F59E0B', stroke: '#F59E0B', width: 4.0, _opacity: 0.95 });
-  if (!segs.length) return;
-  await rpc.invoke('addTempLayerGeoJSON', [L.DAYARC, fc(segs), {
-    type: 'line',
-    paint: { 'line-color': ['get', 'color'], 'line-width': ['get', 'width'], 'line-opacity': ['get', '_opacity'] }
-  }]);
-}
-
-// ─── GERADOR GLB — LINES PURAS (SEM SOMBRAS) ──────────────────────────────────
+// ─── GERADOR GLB — UNLIT PURE LINES (SEM SOMBRAS) ────────────────────────────
 function buildLine(pts){
   if(pts.length<2) return null;
   const pos=[],idx=[];
@@ -305,14 +321,6 @@ function generateGLBGeometry(lat, lng, radius){
   }
   if(anaLines.length){const m=mergeLines(anaLines);if(m){m.color=hex2rgb(COLOR.ANALEMMAS);groups.push(m);}}
 
-  const domeLines=[];
-  for(const alt of[10,20,30,40,50,60,70,80]){
-    const rr=radius*Math.cos(alt*D2R),zz=radius*Math.sin(alt*D2R);if(rr<1)continue;
-    const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push([rr*Math.sin(t),rr*Math.cos(t),zz]);}
-    const line=buildLine(pts);if(line)domeLines.push(line);
-  }
-  if(domeLines.length){const m=mergeLines(domeLines);if(m){m.color=[0.35,0.35,0.35];groups.push(m);}}
-
   const compassLines=[];
   for(const r of[radius,radius*0.95]){
     const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push([r*Math.sin(t),r*Math.cos(t),0]);}
@@ -343,16 +351,24 @@ function buildGLB(groups){
   const bv=[],acc=[],meshes=[],mats=[],nodes=[];let bvI=0,acI=0;
   for(let i=0;i<groups.length;i++){
     const g=groups[i],o=offsets[i];
-    mats.push({pbrMetallicRoughness:{baseColorFactor:[...g.color,1.0],metallicFactor:0,roughnessFactor:0.9},doubleSided:true});
+    // KHR_materials_unlit ativado para IMPEDIR SOMBRAS
+    mats.push({
+      pbrMetallicRoughness:{baseColorFactor:[...g.color,1.0],metallicFactor:0,roughnessFactor:1.0},
+      doubleSided:true,
+      extensions: { "KHR_materials_unlit": {} }
+    });
     bv.push({buffer:0,byteOffset:o.pOff,byteLength:o.pLen,target:34962});
     bv.push({buffer:0,byteOffset:o.iOff,byteLength:o.iLen,target:34963});
     acc.push({bufferView:bvI,componentType:5126,count:g.positions.length/3,type:'VEC3',min:g.min.map(v=>+v.toFixed(3)),max:g.max.map(v=>+v.toFixed(3))});
     acc.push({bufferView:bvI+1,componentType:5123,count:g.indices.length,type:'SCALAR'});
-    // MODE: 1 = GL_LINES!
     meshes.push({primitives:[{attributes:{POSITION:acI},indices:acI+1,material:i,mode:1}]});  
     nodes.push({mesh:i});bvI+=2;acI+=2;
   }
-  const gltf={asset:{version:'2.0',generator:'KV Sun Path vG20'},scene:0,scenes:[{nodes:nodes.map((_,i)=>i)}],nodes,meshes,accessors:acc,bufferViews:bv,buffers:[{byteLength:totalBin}],materials:mats};
+  const gltf={
+    asset:{version:'2.0',generator:'KV Sun Path vG21'},
+    extensionsUsed: ["KHR_materials_unlit"],
+    scene:0,scenes:[{nodes:nodes.map((_,i)=>i)}],nodes,meshes,accessors:acc,bufferViews:bv,buffers:[{byteLength:totalBin}],materials:mats
+  };
   let jsonStr=JSON.stringify(gltf);while(jsonStr.length%4!==0)jsonStr+=' ';
   const jsonBytes=new TextEncoder().encode(jsonStr);
   const totalLen=12+8+jsonBytes.length+8+totalBin;
@@ -370,7 +386,7 @@ function downloadSolarGLB(lat, lng, radius){
   const url=URL.createObjectURL(blob);
   const a=document.createElement('a');a.href=url;a.download=`sun-path-${Math.abs(lat).toFixed(1)}${lat<0?'S':'N'}-r${radius}m.glb`;
   document.body.appendChild(a);a.click();document.body.removeChild(a);URL.revokeObjectURL(url);
-  console.log(`[SunPath] ✓ GLB Linhas ${(blob.size/1024).toFixed(0)}KB`);
+  console.log(`[SunPath] ✓ GLB Unlit Linhas ${(blob.size/1024).toFixed(0)}KB`);
 }
 
 // ─── CARTA SOLAR SVG ─────────────────────────────────────────────────────────
@@ -426,26 +442,36 @@ function SolarApp() {
     (async()=>{try{const fc2=await rpc.invoke('getMapBounds',[]); const ring=fc2?.features?.[0]?.geometry?.coordinates?.[0]; if(!ring) return;const lo=ring.map(c=>c[0]),la=ring.map(c=>c[1]);setLng(parseFloat(((Math.min(...lo)+Math.max(...lo))/2).toFixed(6)));setLat(parseFloat(((Math.min(...la)+Math.max(...la))/2).toFixed(6)));}catch{}})();
   },[]);
 
+  // DRIBLE NO BUG DA SELEÇÃO: Busca dados cirurgicamente
   const handleSelectCenter = async () => {
     try {
-      const selected = giraffeState.get('selectedFeatures') || [];
-      if (selected.length > 0 && selected[0].geometry) {
-        const centroid = turf.centroid(selected[0]);
-        const cLng = centroid.geometry.coordinates[0];
-        const cLat = centroid.geometry.coordinates[1];
-        setLat(parseFloat(cLat.toFixed(6)));
-        setLng(parseFloat(cLng.toFixed(6)));
-        return;
+      const selIds = giraffeState.get('selected');
+      const feats = giraffeState.get('features');
+      if (selIds && selIds.length > 0 && feats) {
+        const id = selIds[0];
+        let feat = null;
+        if (Array.isArray(feats)) feat = feats.find(f => f.id === id);
+        else feat = feats[id];
+        
+        if (feat && feat.geometry) {
+          const centroid = turf.centroid(feat);
+          setLng(parseFloat(centroid.geometry.coordinates[0].toFixed(6)));
+          setLat(parseFloat(centroid.geometry.coordinates[1].toFixed(6)));
+          return;
+        }
       }
-      
-      // Fallback para o Centro da Tela
+    } catch(e) {}
+    
+    // Fallback: Centro do Mapa se nada estiver selecionado
+    try {
       const bounds = await rpc.invoke('getMapBounds', []);
       const ring = bounds?.features?.[0]?.geometry?.coordinates?.[0];
-      if (!ring) return;
-      const lngs=ring.map(c=>c[0]), lats=ring.map(c=>c[1]);
-      setLat(parseFloat(((Math.min(...lats)+Math.max(...lats))/2).toFixed(6)));
-      setLng(parseFloat(((Math.min(...lngs)+Math.max(...lngs))/2).toFixed(6)));
-    } catch(e) { console.error('[SunPath] Erro centralizando:', e?.message); }
+      if (ring) {
+        const lngs=ring.map(c=>c[0]), lats=ring.map(c=>c[1]);
+        setLat(parseFloat(((Math.min(...lats)+Math.max(...lats))/2).toFixed(6)));
+        setLng(parseFloat(((Math.min(...lngs)+Math.max(...lngs))/2).toFixed(6)));
+      }
+    } catch(e) {}
   };
 
   useEffect(()=>{if(syncRef.current)clearTimeout(syncRef.current);syncRef.current=setTimeout(async()=>{setSyncSt('syncing');const r=await syncGiraffeSun(sunNow.az,sunNow.alt);setSyncSt(r.ok?'ok':r.why);},120);return()=>clearTimeout(syncRef.current);},[sunNow]);
@@ -492,7 +518,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-2 gap-2 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2 shrink-0'},
-      h('div',null,h('h1',{className:'text-sm font-semibold text-white'},'☀ LB Sun Path 3D [vG20]'),h('p',{className:'text-[10px] text-slate-600'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°${scaleGLB!==1?' · ×'+scaleGLB.toFixed(1)+'='+effRad+'m':''}`)),
+      h('div',null,h('h1',{className:'text-sm font-semibold text-white'},'☀ LB Sun Path 3D [vG21]'),h('p',{className:'text-[10px] text-slate-600'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°${scaleGLB!==1?' · ×'+scaleGLB.toFixed(1)+'='+effRad+'m':''}`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-1.5 py-0.5 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 min-h-0 overflow-y-auto kv-scroll flex flex-col gap-2'},
@@ -514,7 +540,7 @@ function SolarApp() {
       h('button',{
         onClick: handleSelectCenter,
         className:'w-full py-1.5 rounded border border-slate-700 bg-slate-800/50 text-slate-400 hover:border-amber-500/40 hover:text-amber-400 text-[11px] font-semibold uppercase tracking-wider transition-all'
-      },'⌖ Centro da Seleção (ou Mapa)'),
+      },'⌖ Centro da Seleção (ou Tela)'),
       h('div',{className:'p-3 bg-[#111827] rounded-lg border border-slate-800 mb-1'},
         h('div',{className:'flex items-center justify-between mb-3'},
           h('div',null,h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'),h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)')),
@@ -523,7 +549,7 @@ function SolarApp() {
         h('button',{className:`w-full py-1.5 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors mb-2 ${isBaking?'opacity-50 cursor-wait':''}`,onClick:()=>handleBake('layer')},'⇩ Fixar Camada'),
         h('div',{className:'flex gap-2'},
           h('button',{className:`flex-1 py-1.5 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase tracking-wider hover:bg-emerald-500/20 transition-colors ${isBaking?'opacity-50 cursor-wait':''}`,onClick:()=>handleBake('raw')},'✏️ Editável'),
-          h('button',{onClick:()=>{if(glbBusy)return;setGlbBusy(true);setTimeout(()=>{downloadSolarGLB(lat,lng,rad);setGlbBusy(false);},100);},disabled:glbBusy,className:`flex-1 py-1.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-400 text-[10px] font-bold uppercase tracking-wider hover:bg-sky-500/20 transition-colors ${glbBusy?'opacity-50 cursor-wait':''}`},glbBusy?'⟳ GLB...':'⇩ GLB (Linhas)')
+          h('button',{onClick:()=>{if(glbBusy)return;setGlbBusy(true);setTimeout(()=>{downloadSolarGLB(lat,lng,rad);setGlbBusy(false);},100);},disabled:glbBusy,className:`flex-1 py-1.5 rounded border border-sky-500/30 bg-sky-500/10 text-sky-400 text-[10px] font-bold uppercase tracking-wider hover:bg-sky-500/20 transition-colors ${glbBusy?'opacity-50 cursor-wait':''}`},glbBusy?'⟳ GLB...':'⇩ GLB (Sem Sombra)')
         )
       )
     )
