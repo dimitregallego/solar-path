@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG18]</title>
+  <title>Sun Path 3D · KV [vG19]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -264,73 +264,133 @@ async function plotDailyArc(lat, lng, doy, radius) {
   }]);
 }
 
-// ─── GERADOR GLB — LINE_STRIP (mesma geometria das linhas temp) ───────────────
+// ─── GERADOR GLB — RIBBON MESH (triângulos, compatível com todos os viewers) ──
 function hex2rgb(hex){return[parseInt(hex.slice(1,3),16)/255,parseInt(hex.slice(3,5),16)/255,parseInt(hex.slice(5,7),16)/255];}
 
+// Cria ribbon mesh ao longo de uma polilinha 3D (local metros → glTF Y-up)
+// vertical=true: offset no eixo Y (cima) — visível de frente/lado
+// vertical=false: offset perpendicular à direção — visível de cima (compasso no chão)
+function buildRibbon(pts, halfW=0.10, vertical=true){
+  if(pts.length<2) return null;
+  const pos=[],idx=[];
+  let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i]; // [x_east, y_north, z_up]
+    let ox=0,oy=0,oz=0;
+    if(vertical){ oz=halfW; }
+    else{
+      let dx=0,dy=0;
+      if(i<pts.length-1){dx=pts[i+1][0]-p[0];dy=pts[i+1][1]-p[1];}
+      else{dx=p[0]-pts[i-1][0];dy=p[1]-pts[i-1][1];}
+      const ln=Math.sqrt(dx*dx+dy*dy)||1; ox=-dy/ln*halfW; oy=dx/ln*halfW;
+    }
+    // glTF Y-up: gX=localX(E), gY=localZ(Up), gZ=-localY(N)
+    const ax=p[0]+ox, ay=p[2]+oz,            az=-(p[1]+oy);
+    const bx=p[0]-ox, by=Math.max(0,p[2]-oz),bz=-(p[1]-oy);
+    pos.push(ax,ay,az, bx,by,bz);
+    for(const[x,y,z]of[[ax,ay,az],[bx,by,bz]]){
+      mn[0]=Math.min(mn[0],x);mx[0]=Math.max(mx[0],x);
+      mn[1]=Math.min(mn[1],y);mx[1]=Math.max(mx[1],y);
+      mn[2]=Math.min(mn[2],z);mx[2]=Math.max(mx[2],z);
+    }
+    if(i>0){const b=(i-1)*2,c=i*2;idx.push(b,b+1,c+1, b,c+1,c);}
+  }
+  return{positions:new Float32Array(pos),indices:new Uint16Array(idx),min:mn,max:mx};
+}
+
+function mergeRibbons(ribbons){
+  ribbons=ribbons.filter(Boolean);
+  if(!ribbons.length)return null;
+  let tP=0,tI=0;for(const r of ribbons){tP+=r.positions.length;tI+=r.indices.length;}
+  const P=new Float32Array(tP),I=new Uint16Array(tI);
+  let pO=0,iO=0,vO=0,mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
+  for(const r of ribbons){
+    P.set(r.positions,pO);
+    for(let i=0;i<r.indices.length;i++)I[iO+i]=r.indices[i]+vO;
+    pO+=r.positions.length;iO+=r.indices.length;vO+=r.positions.length/3;
+    for(let j=0;j<3;j++){mn[j]=Math.min(mn[j],r.min[j]);mx[j]=Math.max(mx[j],r.max[j]);}
+  }
+  return{positions:P,indices:I,min:mn,max:mx};
+}
+
 function generateGLBGeometry(lat, lng, radius){
-  // Retorna [{pts:[[x,y,z],...], color:[r,g,b]}, ...]
-  // Coordenadas em metros locais, convertidas para glTF Y-up: gX=E, gY=Up, gZ=-N
   const groups=[];
-  const L2G=(x,y,z)=>[x, Math.max(0,z), -y];  // local→glTF
+  const halfW=Math.max(0.15, radius*0.002);  // espessura: 0.2% do raio, mín 15cm
   const ss=lat<0?[355,17,46,79,107,137,172,199,229,266,292,321]:[172,199,229,266,292,321,355,17,46,79,107,137];
 
   // 12 arcos mensais
   for(let m=0;m<12;m++){
     const pts=[];
-    for(let h=0;h<=24;h+=0.15){const s=calcSun(lat,lng,ss[m],h);if(!s.day&&s.alt<-1)continue;const a=s.alt*D2R,z=s.az*D2R;pts.push(L2G(radius*Math.cos(a)*Math.sin(z),radius*Math.cos(a)*Math.cos(z),radius*Math.sin(a)));}
-    if(pts.length>1) groups.push({pts,color:hex2rgb(COLOR.MONTHS[m])});
+    for(let h=0;h<=24;h+=0.15){
+      const s=calcSun(lat,lng,ss[m],h); if(!s.day&&s.alt<-1)continue;
+      const a=s.alt*D2R,z=s.az*D2R;
+      pts.push([radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), Math.max(0,radius*Math.sin(a))]);
+    }
+    if(pts.length>1){const rb=buildRibbon(pts,halfW,true);if(rb){rb.color=hex2rgb(COLOR.MONTHS[m]);groups.push(rb);}}
   }
 
   // Analemas (8h–18h)
+  const anaRibbons=[];
   for(let h=8;h<=18;h+=1){
     const pts=[];
-    for(let d=1;d<=365;d+=2){const s=calcSun(lat,lng,d,h);if(!s.day||s.alt<=0)continue;const a=s.alt*D2R,z=s.az*D2R;pts.push(L2G(radius*Math.cos(a)*Math.sin(z),radius*Math.cos(a)*Math.cos(z),radius*Math.sin(a)));}
-    if(pts.length>2){pts.push(pts[0]);groups.push({pts,color:hex2rgb(COLOR.ANALEMMAS)});}
+    for(let d=1;d<=365;d+=2){
+      const s=calcSun(lat,lng,d,h); if(!s.day||s.alt<=0)continue;
+      const a=s.alt*D2R,z=s.az*D2R;
+      pts.push([radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), Math.max(0,radius*Math.sin(a))]);
+    }
+    if(pts.length>2){pts.push(pts[0]);const rb=buildRibbon(pts,halfW*0.7,true);if(rb)anaRibbons.push(rb);}
   }
+  if(anaRibbons.length){const m=mergeRibbons(anaRibbons);if(m){m.color=hex2rgb(COLOR.ANALEMMAS);groups.push(m);}}
 
-  // Gaiola 3D (anéis de altitude)
+  // Gaiola 3D
+  const domeRibbons=[];
   for(const alt of[10,20,30,40,50,60,70,80]){
     const rr=radius*Math.cos(alt*D2R),zz=radius*Math.sin(alt*D2R);if(rr<1)continue;
-    const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push(L2G(rr*Math.sin(t),rr*Math.cos(t),zz));}
-    groups.push({pts,color:[0.35,0.35,0.35]});
+    const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push([rr*Math.sin(t),rr*Math.cos(t),zz]);}
+    const rb=buildRibbon(pts,halfW*0.6,true);if(rb)domeRibbons.push(rb);
   }
+  if(domeRibbons.length){const m=mergeRibbons(domeRibbons);if(m){m.color=[0.35,0.35,0.35];groups.push(m);}}
 
-  // Compasso Ladybug: 2 anéis externos + ticks
-  for(const r of[radius,radius*0.95]){const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push(L2G(r*Math.sin(t),r*Math.cos(t),0));}groups.push({pts,color:[0.29,0.34,0.41]});}
-  for(let az=0;az<360;az+=10){const isL=az%30===0;const rT=isL?radius*0.90:radius*0.95;const ar=az*D2R;groups.push({pts:[L2G(rT*Math.sin(ar),rT*Math.cos(ar),0),L2G(radius*Math.sin(ar),radius*Math.cos(ar),0)],color:[0.29,0.34,0.41]});}
+  // Compasso Ladybug: 2 anéis externos + ticks (igual ao temp layer)
+  const compassRibbons=[];
+  for(const r of[radius,radius*0.95]){
+    const pts=[];for(let i=0;i<=90;i++){const t=(i/90)*2*Math.PI;pts.push([r*Math.sin(t),r*Math.cos(t),0]);}
+    const rb=buildRibbon(pts,halfW*0.8,false);if(rb)compassRibbons.push(rb);
+  }
+  for(let az=0;az<360;az+=10){
+    const isL=az%30===0,rT=isL?radius*0.90:radius*0.95,ar=az*D2R;
+    const rb=buildRibbon([[rT*Math.sin(ar),rT*Math.cos(ar),0],[radius*Math.sin(ar),radius*Math.cos(ar),0]],isL?halfW*0.7:halfW*0.4,false);
+    if(rb)compassRibbons.push(rb);
+  }
+  if(compassRibbons.length){const m=mergeRibbons(compassRibbons);if(m){m.color=[0.29,0.34,0.41];groups.push(m);}}
 
   return groups;
 }
 
 function buildGLB(groups){
-  // Calcula tamanho total
-  let totalBin=0; const offsets=[];
+  let totalBin=0;const offsets=[];
   for(const g of groups){
-    const pOff=totalBin,byteLen=g.pts.length*12;  // 3 floats × 4 bytes
-    totalBin+=byteLen;totalBin=(totalBin+3)&~3;
-    offsets.push({pOff,byteLen,count:g.pts.length});
+    const pOff=totalBin;totalBin+=g.positions.byteLength;totalBin=(totalBin+3)&~3;
+    const iOff=totalBin;totalBin+=g.indices.byteLength;totalBin=(totalBin+3)&~3;
+    offsets.push({pOff,pLen:g.positions.byteLength,iOff,iLen:g.indices.byteLength});
   }
-
-  // Preenche buffer
-  const binBuf=new ArrayBuffer(totalBin),dv=new DataView(binBuf);
+  const binBuf=new ArrayBuffer(totalBin),binU8=new Uint8Array(binBuf);
   for(let i=0;i<groups.length;i++){
-    let off=offsets[i].pOff;
-    for(const[x,y,z] of groups[i].pts){dv.setFloat32(off,x,true);off+=4;dv.setFloat32(off,y,true);off+=4;dv.setFloat32(off,z,true);off+=4;}
+    binU8.set(new Uint8Array(groups[i].positions.buffer,groups[i].positions.byteOffset,groups[i].positions.byteLength),offsets[i].pOff);
+    binU8.set(new Uint8Array(groups[i].indices.buffer,groups[i].indices.byteOffset,groups[i].indices.byteLength),offsets[i].iOff);
   }
-
-  // Monta glTF JSON — mode 3 = LINE_STRIP
   const bv=[],acc=[],meshes=[],mats=[],nodes=[];let bvI=0,acI=0;
   for(let i=0;i<groups.length;i++){
     const g=groups[i],o=offsets[i];
-    let mn=[1e9,1e9,1e9],mx=[-1e9,-1e9,-1e9];
-    for(const[x,y,z] of g.pts){mn[0]=Math.min(mn[0],x);mx[0]=Math.max(mx[0],x);mn[1]=Math.min(mn[1],y);mx[1]=Math.max(mx[1],y);mn[2]=Math.min(mn[2],z);mx[2]=Math.max(mx[2],z);}
-    mats.push({pbrMetallicRoughness:{baseColorFactor:[...g.color,1.0],metallicFactor:0,roughnessFactor:1},doubleSided:true});
-    bv.push({buffer:0,byteOffset:o.pOff,byteLength:o.byteLen,target:34962});
-    acc.push({bufferView:bvI,componentType:5126,count:o.count,type:'VEC3',min:mn.map(v=>+v.toFixed(4)),max:mx.map(v=>+v.toFixed(4))});
-    meshes.push({primitives:[{attributes:{POSITION:acI},material:i,mode:3}]});  // 3=LINE_STRIP
-    nodes.push({mesh:i});bvI++;acI++;
+    mats.push({pbrMetallicRoughness:{baseColorFactor:[...g.color,0.95],metallicFactor:0,roughnessFactor:0.9},doubleSided:true,alphaMode:'BLEND'});
+    bv.push({buffer:0,byteOffset:o.pOff,byteLength:o.pLen,target:34962});
+    bv.push({buffer:0,byteOffset:o.iOff,byteLength:o.iLen,target:34963});
+    acc.push({bufferView:bvI,componentType:5126,count:g.positions.length/3,type:'VEC3',min:g.min.map(v=>+v.toFixed(3)),max:g.max.map(v=>+v.toFixed(3))});
+    acc.push({bufferView:bvI+1,componentType:5123,count:g.indices.length,type:'SCALAR'});
+    meshes.push({primitives:[{attributes:{POSITION:acI},indices:acI+1,material:i}]});  // mode:4 TRIANGLES (padrão)
+    nodes.push({mesh:i});bvI+=2;acI+=2;
   }
-  const gltf={asset:{version:'2.0',generator:'KV Sun Path vG18'},scene:0,scenes:[{nodes:nodes.map((_,i)=>i)}],nodes,meshes,accessors:acc,bufferViews:bv,buffers:[{byteLength:totalBin}],materials:mats};
+  const gltf={asset:{version:'2.0',generator:'KV Sun Path vG19'},scene:0,scenes:[{nodes:nodes.map((_,i)=>i)}],nodes,meshes,accessors:acc,bufferViews:bv,buffers:[{byteLength:totalBin}],materials:mats};
   let jsonStr=JSON.stringify(gltf);while(jsonStr.length%4!==0)jsonStr+=' ';
   const jsonBytes=new TextEncoder().encode(jsonStr);
   const totalLen=12+8+jsonBytes.length+8+totalBin;
@@ -338,7 +398,7 @@ function buildGLB(groups){
   gdv.setUint32(0,0x46546C67,true);gdv.setUint32(4,2,true);gdv.setUint32(8,totalLen,true);
   gdv.setUint32(12,jsonBytes.length,true);gdv.setUint32(16,0x4E4F534A,true);new Uint8Array(glb,20).set(jsonBytes);
   const bs=20+jsonBytes.length;gdv.setUint32(bs,totalBin,true);gdv.setUint32(bs+4,0x004E4942,true);
-  new Uint8Array(glb,bs+8).set(new Uint8Array(binBuf));
+  new Uint8Array(glb,bs+8).set(binU8);
   return new Blob([glb],{type:'model/gltf-binary'});
 }
 
@@ -406,46 +466,22 @@ function SolarApp() {
     (async()=>{try{const fc2=await rpc.invoke('getMapBounds',[]); const ring=fc2?.features?.[0]?.geometry?.coordinates?.[0]; if(!ring) return;const lo=ring.map(c=>c[0]),la=ring.map(c=>c[1]);setLng(parseFloat(((Math.min(...lo)+Math.max(...lo))/2).toFixed(6)));setLat(parseFloat(((Math.min(...la)+Math.max(...la))/2).toFixed(6)));}catch{}})();
   },[]);
 
-  // Seleção de centro: ativa ferramenta de ponto no Giraffe + lê rawSections
-  // O usuário clica no mapa → ponto é criado → rawSections dispara → coordenadas capturadas
-  useEffect(()=>{
-    giraffeState.addListener(['rawSections'],()=>{
-      if(!selectModeRef.current) return;
-      const sections=giraffeState.get('rawSections');
-      const pts=(sections?.features||[]).filter(f=>f.geometry?.type==='Point');
-      if(!pts.length) return;
-      // Pega o ponto mais recente (último da lista)
-      const last=pts[pts.length-1];
-      const[cLng,cLat]=last.geometry.coordinates;
-      if(typeof cLng!=='number'||typeof cLat!=='number') return;
+  // Seleção de centro — abordagem definitiva via getMapBounds
+  // O usuário centraliza o mapa no elemento desejado, depois clica no botão.
+  // Isso aciona getMapBounds → calcula centro → atualiza lat/lng → recria layers.
+  const handleSelectCenter = async () => {
+    try {
+      const bounds = await rpc.invoke('getMapBounds', []);
+      const ring = bounds?.features?.[0]?.geometry?.coordinates?.[0];
+      if (!ring) return;
+      const lngs=ring.map(c=>c[0]), lats=ring.map(c=>c[1]);
+      const cLng=(Math.min(...lngs)+Math.max(...lngs))/2;
+      const cLat=(Math.min(...lats)+Math.max(...lats))/2;
       setLat(parseFloat(cLat.toFixed(6)));
       setLng(parseFloat(cLng.toFixed(6)));
-      selectModeRef.current=false;
-      setSelectMode(false);
-      console.log(`[SunPath] ✓ Centro via ponto: ${cLat.toFixed(5)}, ${cLng.toFixed(5)}`);
-    });
-    // Fallback: selectedFeatures (se clicar em ponto existente)
-    giraffeState.addListener(['selectedFeatures'],()=>{
-      if(!selectModeRef.current) return;
-      const sel=giraffeState.get('selectedFeatures');
-      if(!sel?.length) return;
-      for(const f of sel){
-        const c=f.geometry?.coordinates||f.coordinates;
-        if(f.geometry?.type==='Point'&&Array.isArray(c)&&c.length>=2){
-          setLat(parseFloat(c[1].toFixed(6)));setLng(parseFloat(c[0].toFixed(6)));
-          selectModeRef.current=false;setSelectMode(false);
-          console.log(`[SunPath] ✓ Centro via seleção: ${c[1].toFixed(5)}, ${c[0].toFixed(5)}`);
-          return;
-        }
-      }
-    });
-  },[]);
-  useEffect(()=>{
-    selectModeRef.current=selectMode;
-    // Ativa/desativa ferramenta de ponto no Giraffe
-    if(selectMode) rpc.invoke('setDrawTool',['point']).catch(()=>{});
-    else rpc.invoke('setDrawTool',['cursor']).catch(()=>{});
-  },[selectMode]);
+      console.log(`[SunPath] ✓ Centro: ${cLat.toFixed(5)}, ${cLng.toFixed(5)}`);
+    } catch(e) { console.error('[SunPath] getMapBounds:', e?.message); }
+  };
 
   useEffect(()=>{if(syncRef.current)clearTimeout(syncRef.current);syncRef.current=setTimeout(async()=>{setSyncSt('syncing');const r=await syncGiraffeSun(sunNow.az,sunNow.alt);setSyncSt(r.ok?'ok':r.why);},120);return()=>clearTimeout(syncRef.current);},[sunNow]);
 
@@ -494,7 +530,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-2 gap-2 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2 shrink-0'},
-      h('div',null,h('h1',{className:'text-sm font-semibold text-white'},'☀ LB Sun Path 3D [vG18]'),h('p',{className:'text-[10px] text-slate-600'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°${scaleGLB!==1?' · ×'+scaleGLB.toFixed(1)+'='+effRad+'m':''}`)),
+      h('div',null,h('h1',{className:'text-sm font-semibold text-white'},'☀ LB Sun Path 3D [vG19]'),h('p',{className:'text-[10px] text-slate-600'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°${scaleGLB!==1?' · ×'+scaleGLB.toFixed(1)+'='+effRad+'m':''}`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-1.5 py-0.5 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 min-h-0 overflow-y-auto kv-scroll flex flex-col gap-2'},
@@ -514,9 +550,10 @@ function SolarApp() {
         )
       ),
       h('button',{
-        onClick:()=>setSelectMode(v=>!v),
-        className:`w-full py-1.5 rounded border text-[11px] font-semibold uppercase tracking-wider transition-all ${selectMode?'border-red-500/60 bg-red-500/10 text-red-400 animate-pulse':'border-slate-700 bg-slate-800/50 text-slate-400 hover:border-slate-600'}`
-      },selectMode?'⌖ Clique no mapa para inserir ponto de origem...':'⌖ Selecionar Centro'),
+        onClick: handleSelectCenter,
+        className:'w-full py-1.5 rounded border border-slate-700 bg-slate-800/50 text-slate-400 hover:border-amber-500/40 hover:text-amber-400 text-[11px] font-semibold uppercase tracking-wider transition-all'
+      },'⌖ Usar Centro do Mapa'),
+      h('p',{className:'text-[9px] text-slate-600 text-center -mt-1'},'Centralize o mapa no elemento desejado e clique'),
       h('div',{className:'p-3 bg-[#111827] rounded-lg border border-slate-800 mb-1'},
         h('div',{className:'flex items-center justify-between mb-3'},
           h('div',null,h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'),h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)')),
