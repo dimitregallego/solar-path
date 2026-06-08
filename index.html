@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG9]</title>
+  <title>Sun Path 3D · KV [vG10]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -42,6 +42,7 @@ const seasons = lat => {
   return { sum: S?355:172, win: S?172:355, eqMar: 79, eqSep: 266, sumLbl: S?'Verão (Dez)':'Verão (Jun)', winLbl: S?'Inverno (Jun)':'Inverno (Dez)' };
 };
 
+// ─── MATEMÁTICA SOLAR ────────────────────────────────────────────────────────
 function julianDay(doy, hr, yr=2000) {
   const lp=(yr%4===0&&yr%100!==0)||yr%400===0;
   const ml=[0,31,lp?29:28,31,30,31,30,31,31,30,31,30,31];
@@ -91,6 +92,7 @@ async function syncGiraffeSun(az, alt) {
   catch(e) { return { ok:false, why:'error' }; }
 }
 
+// ─── HELPERS E GERAÇÃO 3D ────────────────────────────────────────────────────
 function local2geo(x, y, oLng, oLat) { return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ]; }
 const fc = (features) => ({ type:'FeatureCollection', features });
 const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
@@ -196,6 +198,7 @@ async function plotCompassGround(lat, lng, radius) {
   await rpc.invoke("addTempLayerGeoJSON", [L.LABELS, fc(labels), { type: "symbol", layout: { "text-field": ["get", "label"], "text-size": 12, "text-pitch-alignment": "map", "text-rotation-alignment": "map" }, paint: { "text-color": "#94a3b8", "text-halo-color": "#000000", "text-halo-width": 1.5 } }]);
 }
 
+// ─── CARTA SOLAR SVG ─────────────────────────────────────────────────────────
 const SR=85, SCX=100, SCY=100;
 const sun2svg = (alt,az) => { const r=SR*Math.cos(alt*D2R); return [SCX+r*Math.sin(az*D2R), SCY-r*Math.cos(az*D2R)]; };
 function buildArcPath(lat,lng,doy) {
@@ -227,6 +230,7 @@ function MiniSolarChart({ lat, lng, doy, sunRes, seas }) {
   );
 }
 
+// ─── INTERFACE REACT ─────────────────────────────────────────────────────────
 const fmtH = h => `${String(Math.floor(h)).padStart(2,'0')}:${String(Math.round((h-Math.floor(h))*60)).padStart(2,'0')}`;
 const fmtD = d => new Date(new Date().getFullYear(),0,d).toLocaleDateString('pt-BR',{day:'numeric',month:'short'});
 const _n=new Date(), _doy=Math.floor((_n-new Date(_n.getFullYear(),0,0))/86400000);
@@ -236,6 +240,7 @@ function SolarApp() {
   const [lat,setLat]=useState(INIT.lat); const [lng,setLng]=useState(INIT.lng);
   const [hr, setHr ]=useState(INIT.hr); const [doy,setDoy]=useState(INIT.doy); const [rad,setRad]=useState(INIT.radius);
   const [showChart,setShowChart]=useState(false); const [syncSt,setSyncSt]=useState('idle');
+  const [isBaking,setIsBaking]=useState(false); 
   
   const seas = useMemo(()=>seasons(lat),[lat]); const sunNow = useMemo(()=>calcSun(lat,lng,doy,hr),[lat,lng,doy,hr]);
   const syncRef=useRef(null), dotRef=useRef(null), fixGen=useRef(0);
@@ -295,9 +300,19 @@ function SolarApp() {
       }
       
       pathFeats.forEach(f => f.properties.layer = "Sun Path 3D Mesh");
-      const safeFeats = JSON.parse(JSON.stringify([...compassFeats, ...pathFeats]));
       
-      // O SEGREDO DO BAKE SEGURO: Download do GeoJSON
+      // O SEGREDO DO BAKE SEGURO E AUTOMÁTICO 3D:
+      // Renomeamos as propriedades para os nomes nativos que o Giraffe espera ler para extrusão.
+      const safeFeats = JSON.parse(JSON.stringify([...compassFeats, ...pathFeats])).map(feat => {
+        if (feat.properties) {
+          feat.properties.baseHeight = feat.properties._baseHeight;
+          feat.properties.height = feat.properties._height;
+          // Garantimos que a cor nativa também seja reconhecida
+          feat.properties.fill = feat.properties.color;
+        }
+        return feat;
+      });
+      
       const geojson = { type: "FeatureCollection", features: safeFeats };
       const blob = new Blob([JSON.stringify(geojson)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -307,7 +322,7 @@ function SolarApp() {
       a.click();
       URL.revokeObjectURL(url);
       
-      alert('Arquivo GeoJSON gerado! Arraste o arquivo "SunPath_3D_Bake.geojson" diretamente para a tela do Giraffe para fixar a geometria.');
+      alert('Arquivo GeoJSON gerado! Arraste o arquivo "SunPath_3D_Bake.geojson" diretamente para a tela do Giraffe. Ele será extrudado em 3D automaticamente.');
     } catch (e) {
       console.error(e);
       alert('Erro ao gerar a geometria.');
@@ -319,7 +334,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG9]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG10]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
