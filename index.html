@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG14]</title>
+  <title>Sun Path 3D · KV [vG15]</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
@@ -92,7 +92,7 @@ async function syncGiraffeSun(az, alt) {
   catch(e) { return { ok:false, why:'error' }; }
 }
 
-// ─── FATIADOR DE LINHAS 3D (SEM HEIGHT PARA NÃO VIRAR PAREDE) ────────────────
+// ─── FATIADOR DE LINHAS 3D (SEM HEIGHT, COM STROKE PARA COR) ─────────────────
 function local2geo(x, y, oLng, oLat) { return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ]; }
 const fc = (features) => ({ type:'FeatureCollection', features });
 const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
@@ -105,10 +105,9 @@ function segmentLine3D(coords3D, properties) {
     
     const z = (p1[2] + p2[2]) / 2;
     
-    // Mantemos as coordenadas X, Y, Z originais na geometria da linha
     const line = turf.lineString([p1, p2]);
     
-    // Injetamos APENAS a altura de flutuação (baseHeight). NENHUM height.
+    // Injetamos a altura de flutuação e a cor como STROKE (padrão de linha)
     line.properties = { 
       ...properties, 
       _baseHeight: z, 
@@ -135,7 +134,7 @@ function generateAnalyticMesh(lat, lng, radius, currentDoy) {
     }
     if (coords3D.length > 1) {
       const isCurrent = Math.abs(doy - currentDoy) < 15;
-      features.push(...segmentLine3D(coords3D, { color: COLOR.MONTHS[m % 12], width: isCurrent ? 3.5 : 1.5, _opacity: isCurrent ? 1.0 : 0.4 }));
+      features.push(...segmentLine3D(coords3D, { color: COLOR.MONTHS[m % 12], stroke: COLOR.MONTHS[m % 12], width: isCurrent ? 3.5 : 1.5, _opacity: isCurrent ? 1.0 : 0.4 }));
     }
   }
 
@@ -150,7 +149,7 @@ function generateAnalyticMesh(lat, lng, radius, currentDoy) {
     }
     if (coords3D.length > 2) {
       coords3D.push(coords3D[0]);
-      features.push(...segmentLine3D(coords3D, { color: COLOR.ANALEMMAS, width: 1.5, _opacity: 0.35 }));
+      features.push(...segmentLine3D(coords3D, { color: COLOR.ANALEMMAS, stroke: COLOR.ANALEMMAS, width: 1.5, _opacity: 0.35 }));
     }
   }
   return features;
@@ -309,7 +308,7 @@ function SolarApp() {
 
   useEffect(()=>()=>Object.values(L).forEach(rm),[]);
 
-  const handleBake = async () => {
+  const handleBake = async (mode) => {
     if (isBaking) return;
     setIsBaking(true);
     try {
@@ -317,33 +316,41 @@ function SolarApp() {
       const compassFeats = [];
       const center = [lng, lat];
       
+      // Compasso no chão (Z=0)
       for (let r = rad * 0.33; r <= rad; r += rad * 0.33) {
         const ring = [];
         for (let angle = 0; angle <= 360; angle += 5) ring.push(turf.destination(turf.point(center), r/1000, angle, {units: 'kilometers'}).geometry.coordinates);
-        const line = turf.lineString(ring, { color: '#ffffff', width: 1, _opacity: 0.2, layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
+        const line = turf.lineString(ring, { color: '#ffffff', stroke: '#ffffff', width: 1, _opacity: 0.2, _layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
         compassFeats.push(line);
       }
       for (let angle = 0; angle < 360; angle += 15) {
         const far = turf.destination(turf.point(center), rad/1000, angle, {units: 'kilometers'}).geometry.coordinates;
         const isMain = angle % 90 === 0;
-        const line = turf.lineString([center, far], { color: '#ffffff', width: isMain ? 1.5 : 1, _opacity: isMain ? 0.4 : 0.15, layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
+        const line = turf.lineString([center, far], { color: '#ffffff', stroke: '#ffffff', width: isMain ? 1.5 : 1, _opacity: isMain ? 0.4 : 0.15, _layer: "Sun Path Compass", baseHeight: 0, _baseHeight: 0 });
         compassFeats.push(line);
       }
       
-      pathFeats.forEach(f => f.properties.layer = "Sun Path 3D Mesh");
+      pathFeats.forEach(f => f.properties._layer = "Sun Path 3D Mesh");
+      
+      // Preparação das propriedades (corringindo FILL vs STROKE)
       const safeFeats = JSON.parse(JSON.stringify([...compassFeats, ...pathFeats])).map(feat => {
         if (feat.properties) {
-          feat.properties.fill = feat.properties.color;
-          feat.properties.stroke = feat.properties.color;
-          // REMOVENDO QUALQUER MENÇÃO A HEIGHT (EVITA CRIAR PAREDES)
-          delete feat.properties.height;
+          feat.properties.stroke = feat.properties.color; // A cor correta para Linhas é stroke!
+          delete feat.properties.fill; // Evita que o Giraffe tente preencher a linha
+          delete feat.properties.height; // Evita gerar paredes
           delete feat.properties._height;
         }
         return feat;
       });
       
-      await rpc.invoke('updateGeoJSONLayerContents', ['☀ Sun Path 3D (Lines)', { type: 'FeatureCollection', features: safeFeats }]);
-      alert('Linhas 3D fixadas no projeto com sucesso!');
+      if (mode === 'raw') {
+        await rpc.invoke('createRawSections', [safeFeats]);
+        alert('Linhas Editáveis geradas no projeto! Você pode clicar e editar elas no mapa.');
+      } else {
+        await rpc.invoke('updateGeoJSONLayerContents', ['☀ Sun Path 3D (Lines)', { type: 'FeatureCollection', features: safeFeats }]);
+        alert('Camada 3D fixada no projeto com sucesso!');
+      }
+
     } catch (e) {
       console.error(e);
       alert('Erro ao salvar no projeto. Verifique o console ou a conexão.');
@@ -356,7 +363,7 @@ function SolarApp() {
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG14]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
+      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG15]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
       syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
     ),
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
@@ -375,10 +382,16 @@ function SolarApp() {
           h('div',null, h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)')),
           h('button',{className:`toggle ${showChart?'on':''}`,onClick:()=>setShowChart(v=>!v)})
         ),
-        h('button', {
-          className: `w-full py-2 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[11px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors ${isBaking ? 'opacity-50 cursor-wait' : ''}`,
-          onClick: handleBake
-        }, isBaking ? 'Assando Linhas 3D...' : '⇩ Fixar Carta (Linhas Flutuantes)')
+        h('div', { className: 'flex gap-2' },
+          h('button', {
+            className: `flex-1 py-2 rounded border border-amber-500/30 bg-amber-500/10 text-amber-500 text-[10px] font-bold uppercase tracking-wider hover:bg-amber-500/20 transition-colors ${isBaking ? 'opacity-50 cursor-wait' : ''}`,
+            onClick: () => handleBake('layer')
+          }, '⇩ Fixar Camada'),
+          h('button', {
+            className: `flex-1 py-2 rounded border border-emerald-500/30 bg-emerald-500/10 text-emerald-500 text-[10px] font-bold uppercase tracking-wider hover:bg-emerald-500/20 transition-colors ${isBaking ? 'opacity-50 cursor-wait' : ''}`,
+            onClick: () => handleBake('raw')
+          }, '✏️ Fixar Editável')
+        )
       )
     )
   );
