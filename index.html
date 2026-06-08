@@ -3,19 +3,27 @@
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <title>Sun Path 3D · KV [vG6]</title>
+  <title>Sun Path 3D · KV</title>
   <link href="https://fonts.googleapis.com/css2?family=Hind:wght@300;400;500;600&display=swap" rel="stylesheet"/>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     body { font-family:'Hind',system-ui,sans-serif; overflow:hidden; }
     .kv-scroll::-webkit-scrollbar { width:3px; }
     .kv-scroll::-webkit-scrollbar-thumb { background:#333; border-radius:2px; }
-    .kv-slider { -webkit-appearance:none; appearance:none; width:100%; height:3px; background:#2d3748; border-radius:2px; cursor:pointer; outline:none; }
-    .kv-slider::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px; border-radius:50%; background:#F59E0B; border:2px solid #0f1117; cursor:pointer; transition:transform .1s, box-shadow .1s; }
-    .kv-slider::-webkit-slider-thumb:active { transform:scale(1.35); box-shadow:0 0 0 5px rgba(245,158,11,.2); }
-    .toggle { position:relative; width:36px; height:20px; background:#2d3748; border-radius:10px; cursor:pointer; border:none; padding:0; transition:background .2s; }
+    .kv-slider { -webkit-appearance:none; appearance:none; width:100%; height:3px;
+      background:#2d3748; border-radius:2px; cursor:pointer; outline:none; }
+    .kv-slider::-webkit-slider-thumb { -webkit-appearance:none; width:14px; height:14px;
+      border-radius:50%; background:#F59E0B; border:2px solid #0f1117; cursor:pointer;
+      transition:transform .1s, box-shadow .1s; }
+    .kv-slider::-webkit-slider-thumb:active { transform:scale(1.35);
+      box-shadow:0 0 0 5px rgba(245,158,11,.2); }
+    .kv-slider::-moz-range-thumb { width:14px; height:14px; border-radius:50%;
+      background:#F59E0B; border:2px solid #0f1117; cursor:pointer; }
+    .toggle { position:relative; width:36px; height:20px; background:#2d3748;
+      border-radius:10px; cursor:pointer; border:none; padding:0; transition:background .2s; }
     .toggle.on { background:rgba(245,158,11,.15); border:1px solid #F59E0B; }
-    .toggle::after { content:''; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:#718096; transition:transform .2s, background .2s; }
+    .toggle::after { content:''; position:absolute; top:2px; left:2px; width:14px; height:14px;
+      border-radius:50%; background:#718096; transition:transform .2s, background .2s; }
     .toggle.on::after { transform:translateX(16px); background:#F59E0B; }
   </style>
 </head>
@@ -23,27 +31,19 @@
 <div id="root"></div>
 
 <script type="module">
-import { createElement as h, useState, useEffect, useRef, useMemo } from 'https://esm.sh/react@18';
+import { createElement as h, useState, useEffect, useRef, useMemo }
+  from 'https://esm.sh/react@18';
 import { createRoot } from 'https://esm.sh/react-dom@18/client';
 import { giraffeState, rpc } from 'https://esm.sh/@gi-nx/iframe-sdk@latest';
-import * as turf from 'https://esm.sh/@turf/turf@6.5.0';
+// Sem turf.js — toda a geometria é gerada com matemática pura para
+// evitar o erro "[object Object] is not valid JSON" causado por
+// propriedades internas do turf que não serializam corretamente via SDK
 
+// ══════════════════════════════════════════════════════════════════════
+//  MOTOR SOLAR — NOAA / Meeus / Ladybug Tools
+// ══════════════════════════════════════════════════════════════════════
 const D2R = Math.PI/180, R2D = 180/Math.PI;
 
-const COLOR = {
-  MONTHS: ['#fff7ad', '#ffe491', '#ffd175', '#ffbe59', '#ffaa3d', '#ff9621', '#ff8205', '#f26e00', '#e55a00', '#d84600', '#cc3200', '#bf1e00'],
-  ANALEMMAS: '#40a0ff', SUN: ['#D97706', '#F59E0B']
-};
-
-const L = { PATHS:'sp-paths', COMPASS:'sp-compass', LABELS:'sp-labels', DOT:'sp-dot', POLE:'sp-pole' };
-
-// A FUNÇÃO QUE FALTAVA NA VERSÃO ANTERIOR!
-const seasons = lat => {
-  const S = lat < 0;
-  return { sum: S?355:172, win: S?172:355, eqMar: 79, eqSep: 266, sumLbl: S?'Verão (Dez)':'Verão (Jun)', winLbl: S?'Inverno (Jun)':'Inverno (Dez)' };
-};
-
-// ─── MATEMÁTICA SOLAR ────────────────────────────────────────────────────────
 function julianDay(doy, hr, yr=2000) {
   const lp=(yr%4===0&&yr%100!==0)||yr%400===0;
   const ml=[0,31,lp?29:28,31,30,31,30,31,31,30,31,30,31];
@@ -58,14 +58,16 @@ function calcSun(lat, lng, doy, hr) {
   let L0=280.46646+T*(36000.76983+T*0.0003032); L0=((L0%360)+360)%360;
   let M=357.52911+T*(35999.05029-0.0001537*T);  M=((M%360)+360)%360;
   const Mr=M*D2R, e=0.016708634-T*(0.000042037+0.0000001267*T);
-  const C=(1.914602-T*(0.004817+0.000014*T))*Math.sin(Mr)+(0.019993-0.000101*T)*Math.sin(2*Mr)+0.000289*Math.sin(3*Mr);
+  const C=(1.914602-T*(0.004817+0.000014*T))*Math.sin(Mr)
+         +(0.019993-0.000101*T)*Math.sin(2*Mr)+0.000289*Math.sin(3*Mr);
   const sl=L0+C, om=125.04-1934.136*T;
   const la=sl-0.00569-0.00478*Math.sin(om*D2R);
   const e0=23+(26+(21.448-T*(46.815+T*(0.00059-T*0.001813)))/60)/60;
   const ep=e0+0.00256*Math.cos(om*D2R), er=ep*D2R;
   const dec=Math.asin(Math.max(-1,Math.min(1,Math.sin(er)*Math.sin(la*D2R))))*R2D;
   const y=Math.pow(Math.tan(er/2),2), L0r=L0*D2R;
-  const eot=4*R2D*(y*Math.sin(2*L0r)-2*e*Math.sin(Mr)+4*e*y*Math.sin(Mr)*Math.cos(2*L0r)-0.5*y*y*Math.sin(4*L0r)-1.25*e*e*Math.sin(2*Mr));
+  const eot=4*R2D*(y*Math.sin(2*L0r)-2*e*Math.sin(Mr)+4*e*y*Math.sin(Mr)*Math.cos(2*L0r)
+            -0.5*y*y*Math.sin(4*L0r)-1.25*e*e*Math.sin(2*Mr));
   const tz=Math.round(lng/15);
   let tst=(hr*60+eot+4*lng-60*tz); tst=((tst%1440)+1440)%1440;
   const sn=(720-4*lng-eot+tz*60)/60, ha=(tst/4)-180;
@@ -81,229 +83,538 @@ function calcSun(lat, lng, doy, hr) {
   return { alt, az, sn, day: alt>-0.83 };
 }
 
+// ══════════════════════════════════════════════════════════════════════
+//  SYNC DE SOMBRAS — CORREÇÃO DO ERRO [object Object]
+//
+//  CAUSA: `...views[0]` espalhava o objeto view do Giraffe que contém
+//  Proxy, getters ou referências circulares → JSON.stringify falhava
+//  no SDK e retornava "[object Object]" em vez de JSON válido.
+//
+//  CORREÇÃO: JSON round-trip (parse(stringify())) clona apenas as
+//  partes plain-JSON do objeto, descartando tudo não-serializável.
+// ══════════════════════════════════════════════════════════════════════
 async function syncGiraffeSun(az, alt) {
   if(alt < -5) return { ok:false, why:'night' };
   const views = giraffeState.get('views') || [];
   if(!views.length) return { ok:false, why:'no_views' };
+
+  // JSON round-trip: garante objeto 100% serializável (sem Proxy/getter/Symbol)
   let safeView;
-  try { safeView = JSON.parse(JSON.stringify(views[0])); }
-  catch { safeView = { id: views[0].id, name: views[0].name || '', layerTree: views[0].layerTree || [] }; }
-  const patchedView = { ...safeView, sun: { ...(safeView.sun || {}), azimuth: az, altitude: alt }, sunAzimuth: az, sunAltitude: alt };
-  try { await rpc.invoke('activateViewLayers', [patchedView]); return { ok:true }; }
-  catch(e) { return { ok:false, why:'error' }; }
+  try {
+    safeView = JSON.parse(JSON.stringify(views[0]));
+  } catch {
+    // Se falhou, usa versão mínima com apenas os campos essenciais
+    safeView = {
+      id:        views[0].id,
+      name:      views[0].name   || '',
+      layerTree: views[0].layerTree || [],
+    };
+  }
+
+  // Injeta sun position em múltiplos formatos (Giraffe usará o que reconhecer)
+  const patchedView = {
+    ...safeView,
+    sun:        { ...(safeView.sun || {}), azimuth: az, altitude: alt },
+    sunAzimuth: az,
+    sunAltitude: alt,
+  };
+
+  try {
+    await rpc.invoke('activateViewLayers', [patchedView]);
+    return { ok:true };
+  } catch(e) {
+    console.error('[KV SunPath] syncSombras:', e?.message);
+    return { ok:false, why:'error' };
+  }
 }
 
-// ─── HELPERS E DESENHO ───────────────────────────────────────────────────────
-function local2geo(x, y, oLng, oLat) { return [ oLng + x / (111320 * Math.cos(oLat*D2R)), oLat + y / 111320 ]; }
+// ══════════════════════════════════════════════════════════════════════
+//  HELPERS DE GEOMETRIA — pura matemática, sem turf.js
+// ══════════════════════════════════════════════════════════════════════
+
+/** Converte metros locais → [lng, lat] (aprox. equiretangular, erro <0.5m para r<1km) */
+function local2geo(x, y, oLng, oLat) {
+  return [
+    oLng + x / (111320 * Math.cos(oLat*D2R)),
+    oLat + y / 111320,
+  ];
+}
+
+/** Gera um circle como array de coordenadas geográficas */
+function makeCircle(lat, lng, radiusM, steps=72) {
+  const pts = [];
+  for(let i=0; i<=steps; i++) {
+    const t = (i/steps)*2*Math.PI;
+    pts.push(local2geo(radiusM*Math.sin(t), radiusM*Math.cos(t), lng, lat));
+  }
+  return pts;
+}
+
+/** Feature GeoJSON limpa — apenas type/geometry/properties (sem metadata interna) */
+function feat(geomType, coords, props={}) {
+  return { type:'Feature', geometry:{ type:geomType, coordinates:coords }, properties:props };
+}
+
+/** FeatureCollection simples */
 const fc = (features) => ({ type:'FeatureCollection', features });
-const rm = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
 
-// Converte a linha em um tubo super fino para poder flutuar em 3D!
-function extrudeLine3D(coords3D, properties) {
-  const segments = [];
-  for (let i = 0; i < coords3D.length - 1; i++) {
-    const p1 = coords3D[i], p2 = coords3D[i+1];
-    if (p1[2] < -1 && p2[2] < -1) continue; 
-    const line = turf.lineString([[p1[0], p1[1]], [p2[0], p2[1]]]);
-    const poly = turf.buffer(line, 0.35, { units: 'meters' }); // Linhas de 35cm para visibilidade
-    if (poly) {
-      poly.properties = { ...properties, _baseHeight: Math.max(0, Math.min(p1[2], p2[2])), _height: Math.max(0.1, Math.max(p1[2], p2[2]) + 0.35) };
-      segments.push(poly);
-    }
-  }
-  return segments;
-}
+const seasons = lat => {
+  const S=lat<0;
+  return { sum:S?355:172, win:S?172:355, eqMar:79, eqSep:266,
+    sumLbl:S?'Verão (Dez)':'Verão (Jun)', winLbl:S?'Inverno (Jun)':'Inverno (Dez)' };
+};
 
-async function plotAnalyticWireframes(lat, lng, radius, currentDoy) {
-  await rm(L.PATHS);
-  const features = [];
-  const seasonSteps = lat < 0 ? [355, 17, 46, 79, 107, 137, 172, 199, 229, 266, 292, 321] : [172, 199, 229, 266, 292, 321, 355, 17, 46, 79, 107, 137];
-  
-  // Arcos Mensais
-  for (let m = 0; m < 12; m++) {
-    const doy = seasonSteps[m];
-    const coords3D = [];
-    for (let h = 0; h <= 24; h += 0.5) {
-      const sun = calcSun(lat, lng, doy, h);
-      if (!sun.day && sun.alt < -1) continue;
-      const a = sun.alt*D2R, z = sun.az*D2R;
-      const [ln, la] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
-      coords3D.push([ln, la, Math.max(0, radius*Math.sin(a))]);
-    }
-    if (coords3D.length > 1) {
-      const isCurrent = Math.abs(doy - currentDoy) < 15;
-      features.push(...extrudeLine3D(coords3D, { color: COLOR.MONTHS[m % 12], _opacity: isCurrent ? 1.0 : 0.4 }));
-    }
-  }
+// IDs de camadas
+const L = {
+  RING_H:'sp-rh', RINGS:'sp-rg', AZ_C:'sp-azc', AZ_M:'sp-azm',
+  DOME_3D:'sp-d3', LABELS:'sp-lb',
+  SUM:'sp-su', WIN:'sp-wi', EQX:'sp-eq', TOD:'sp-to',
+  POLE:'sp-po', DOT:'sp-dt',
+};
 
-  // Analemas em 8
-  for (let h = 8; h <= 18; h += 1) {
-    const coords3D = [];
-    for (let doy = 1; doy <= 365; doy += 6) {
-      const sun = calcSun(lat, lng, doy, h);
-      if (!sun.day || sun.alt <= 0) continue;
-      const a = sun.alt*D2R, z = sun.az*D2R;
-      const [ln, la] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
-      coords3D.push([ln, la, Math.max(0, radius*Math.sin(a))]);
-    }
-    if (coords3D.length > 2) {
-      coords3D.push(coords3D[0]);
-      features.push(...extrudeLine3D(coords3D, { color: COLOR.ANALEMMAS, _opacity: 0.35 }));
-    }
-  }
+const rm    = async id => { try{ await rpc.invoke('removeTempLayer',[id]); }catch{} };
+const rmAll = ()        => Promise.allSettled(Object.values(L).map(rm));
 
-  await rpc.invoke("addTempLayerGeoJSON", [L.PATHS, fc(features), { type: "fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"] } }]);
-}
-
-async function plotSunDotAndPole(lat, lng, doy, hr, radius) {
-  await rm(L.DOT); await rm(L.POLE);
-  const sun = calcSun(lat, lng, doy, hr); if(!sun.day) return;
-  const a = sun.alt*D2R, z = sun.az*D2R;
-  const coordZ = Math.max(0, radius*Math.sin(a));
-  const [sLng, sLat] = local2geo(radius*Math.cos(a)*Math.sin(z), radius*Math.cos(a)*Math.cos(z), lng, lat);
-  const col = sun.alt>20 ? COLOR.SUN[1] : COLOR.SUN[0];
-  
-  // Mastro flutuante 3D
-  const polePoly = turf.buffer(turf.lineString([[sLng, sLat], [sLng, sLat]]), 0.6, { units: 'meters' });
-  polePoly.properties = { color: col, _baseHeight: 0, _height: coordZ, _opacity: 0.6 };
-  await rpc.invoke("addTempLayerGeoJSON", [L.POLE, fc([polePoly]), { type: "fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"] } }]);
-  
-  // Bolinha Solar 3D
-  const dotPoly = turf.buffer(turf.point([sLng, sLat]), 4.0, { units: 'meters' });
-  dotPoly.properties = { color: col, _baseHeight: coordZ, _height: coordZ + 4.0, _opacity: 1 };
-  await rpc.invoke("addTempLayerGeoJSON", [L.DOT, fc([dotPoly]), { type:"fill-extrusion", paint: { "fill-extrusion-color": ["get", "color"], "fill-extrusion-base": ["get", "_baseHeight"], "fill-extrusion-height": ["get", "_height"], "fill-extrusion-opacity": ["get", "_opacity"] } }]);
-}
-
+// ══════════════════════════════════════════════════════════════════════
+//  COMPASSO — anéis + radiais + rótulos (todos type:"line"/"symbol")
+//  Sem data-driven expressions numéricas → evita parsing errors no SDK
+//  Layers separados por estilo em vez de ['case',['get','xxx'],n1,n2]
+// ══════════════════════════════════════════════════════════════════════
 async function plotCompassGround(lat, lng, radius) {
-  await rm(L.COMPASS); await rm(L.LABELS);
-  const features = [], labels = [];
-  const center = [lng, lat];
+  await rm(L.RING_H); await rm(L.RINGS);
+  await rm(L.AZ_C);   await rm(L.AZ_M);
+  await rm(L.LABELS);
 
-  for (let r = radius * 0.33; r <= radius; r += radius * 0.33) {
-    const ring = [];
-    for (let angle = 0; angle <= 360; angle += 5) ring.push(turf.destination(turf.point(center), r/1000, angle, {units: 'kilometers'}).geometry.coordinates);
-    features.push(turf.lineString(ring, { color: '#ffffff', width: 1, opacity: 0.2 }));
+  // ── Anéis de altitude: raio no chão = R·cos(alt°) ─────────────────
+  const horizonPts = makeCircle(lat, lng, radius);           // 0° — horizonte
+  const innerRings = [];
+  for(const alt of [10,20,30,40,50,60,70,80]) {
+    const rr = radius * Math.cos(alt*D2R);
+    if(rr < 1) continue;
+    innerRings.push(feat('LineString', makeCircle(lat, lng, rr)));
   }
 
-  for (let angle = 0; angle < 360; angle += 15) {
-    const far = turf.destination(turf.point(center), radius/1000, angle, {units: 'kilometers'}).geometry.coordinates;
-    const isMain = angle % 90 === 0;
-    features.push(turf.lineString([center, far], { color: '#ffffff', width: isMain ? 1.5 : 1, opacity: isMain ? 0.4 : 0.15 }));
-    if (angle % 30 === 0) {
-      let lbl = angle + '°';
-      if(angle === 0) lbl = 'N'; else if(angle === 90) lbl = 'L'; else if(angle === 180) lbl = 'S'; else if(angle === 270) lbl = 'O';
-      labels.push(turf.destination(turf.point(center), (radius+18)/1000, angle, {units: 'kilometers', properties: { label: lbl }}));
+  // Anel do horizonte — linha mais grossa/brilhante (camada separada)
+  await rpc.invoke('addTempLayerGeoJSON', [
+    L.RING_H, fc([feat('LineString', horizonPts)]),
+    { type:'line', paint:{ 'line-color':'#ffffff','line-width':1.5,'line-opacity':0.35 },
+      layout:{ 'line-cap':'round' } },
+  ]);
+
+  // Demais anéis — linha fina
+  if(innerRings.length) {
+    await rpc.invoke('addTempLayerGeoJSON', [
+      L.RINGS, fc(innerRings),
+      { type:'line', paint:{ 'line-color':'#ffffff','line-width':0.6,'line-opacity':0.14 },
+        layout:{ 'line-cap':'round' } },
+    ]);
+  }
+
+  // ── Linhas radiais de azimute ─────────────────────────────────────
+  const cardLines = [], minorLines = [];
+  for(let az=0; az<360; az+=10) {
+    const ar = az*D2R;
+    const start = local2geo(radius*0.04*Math.sin(ar), radius*0.04*Math.cos(ar), lng, lat);
+    const end   = local2geo(radius*Math.sin(ar),       radius*Math.cos(ar),       lng, lat);
+    const line  = feat('LineString', [start, end]);
+    if(az%90===0)     cardLines.push(line);
+    else if(az%30===0) cardLines.push(feat('LineString',[start,end]));  // intercardinals
+    else               minorLines.push(line);
+  }
+
+  if(cardLines.length) {
+    await rpc.invoke('addTempLayerGeoJSON', [
+      L.AZ_C, fc(cardLines),
+      { type:'line', paint:{ 'line-color':'#ffffff','line-width':0.8,'line-opacity':0.25 } },
+    ]);
+  }
+  if(minorLines.length) {
+    await rpc.invoke('addTempLayerGeoJSON', [
+      L.AZ_M, fc(minorLines),
+      { type:'line', paint:{ 'line-color':'#ffffff','line-width':0.35,'line-opacity':0.08 } },
+    ]);
+  }
+
+  // ── Rótulos cardeais + ângulos ────────────────────────────────────
+  const lblR = radius * 1.13;
+  const lblDefs = [
+    {az:0,l:'N'},{az:30,l:'30°'},{az:60,l:'60°'},{az:90,l:'L'},
+    {az:120,l:'120°'},{az:150,l:'150°'},{az:180,l:'S'},
+    {az:210,l:'210°'},{az:240,l:'240°'},{az:270,l:'O'},
+    {az:300,l:'300°'},{az:330,l:'330°'},
+  ];
+  const lblFeats = lblDefs.map(({az,l}) => {
+    const ar=az*D2R;
+    return feat('Point', local2geo(lblR*Math.sin(ar), lblR*Math.cos(ar), lng, lat), { label:l });
+  });
+  await rpc.invoke('addTempLayerGeoJSON', [
+    L.LABELS, fc(lblFeats),
+    { type:'symbol',
+      layout:{
+        'text-field': ['get','label'],   // ['get','xxx'] para text-field: OK no SDK
+        'text-size': 11,
+        'text-pitch-alignment': 'map',
+        'text-rotation-alignment': 'map',
+      },
+      paint:{ 'text-color':'#94a3b8','text-halo-color':'#0f1117','text-halo-width':1.5 },
+    },
+  ]);
+}
+
+/** Anéis de altitude flutuando em 3D no céu — a "gaiola" Ladybug */
+async function plotDome3D(lat, lng, radius) {
+  await rm(L.DOME_3D);
+  const rings = [];
+  for(const alt of [10,20,30,40,50,60,70,80]) {
+    const rh = radius*Math.cos(alt*D2R), z = radius*Math.sin(alt*D2R);
+    if(rh < 1) continue;
+    const coords = [];
+    for(let i=0; i<=72; i++) {
+      const t=(i/72)*2*Math.PI;
+      const [ln,la]=local2geo(rh*Math.sin(t),rh*Math.cos(t),lng,lat);
+      coords.push([ln,la,z]);   // coordenada 3D: Z = elevação do anel
+    }
+    rings.push(feat('LineString', coords));
+  }
+  if(!rings.length) return;
+  await rpc.invoke('addTempLayerGeoJSON', [
+    L.DOME_3D, fc(rings),
+    { type:'line',
+      paint:{ 'line-color':'#ffffff','line-width':0.5,'line-opacity':0.12 },
+    },
+  ]);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  ARCOS SOLARES 3D — LineString com coordenada Z nativa
+//
+//  O Mapbox GL v2+ do Giraffe lê automaticamente o 3º valor [lng,lat,Z]
+//  e faz a linha flutuar no espaço. Paint com APENAS color/width/opacity.
+//  Nenhum line-elevation, _baseHeight, _height ou fill-extrusion.
+//
+//  fromProjected chamado SEQUENCIALMENTE (não Promise.all) para
+//  evitar race condition no mini-iframe-rpc que causava o erro.
+// ══════════════════════════════════════════════════════════════════════
+async function genArc3D(lat, lng, doy, radius) {
+  const pts = [];
+  for(let hr=0; hr<=24; hr+=0.25) {
+    const s=calcSun(lat,lng,doy,hr);
+    if(!s.day||s.alt<-0.5) continue;
+    const a=s.alt*D2R, z=s.az*D2R;
+    pts.push({
+      x: radius*Math.cos(a)*Math.sin(z),
+      y: radius*Math.cos(a)*Math.cos(z),
+      z: Math.max(0, radius*Math.sin(a)),
+    });
+  }
+  if(pts.length < 2) return null;
+
+  // Converter XY → geográfico via fromProjected
+  // SEQUENCIAL: evita race conditions no mini-iframe-rpc do SDK
+  const geo = [];
+  for(const p of pts) {
+    try {
+      const [ln,la] = await rpc.invoke('fromProjected',[[p.x,p.y],[lng,lat]]);
+      geo.push([ln, la, p.z]);
+    } catch {
+      const [ln,la] = local2geo(p.x,p.y,lng,lat);
+      geo.push([ln, la, p.z]);
     }
   }
 
-  await rpc.invoke("addTempLayerGeoJSON", [L.COMPASS, fc(features), { type: "line", paint: { "line-color": ["get", "color"], "line-width": ["get", "width"], "line-opacity": ["get", "opacity"] } }]);
-  await rpc.invoke("addTempLayerGeoJSON", [L.LABELS, fc(labels), { type: "symbol", layout: { "text-field": ["get", "label"], "text-size": 12, "text-pitch-alignment": "map", "text-rotation-alignment": "map" }, paint: { "text-color": "#94a3b8", "text-halo-color": "#000000", "text-halo-width": 1.5 } }]);
+  // Altitude exclusivamente no índice Z da coordenada — o Mapbox GL lê automaticamente
+  return feat('LineString', geo);
 }
 
-// ─── CARTA SOLAR SVG ─────────────────────────────────────────────────────────
+async function plotArcLine(id, arcFeat, color, width=2, opacity=0.8) {
+  await rm(id);
+  if(!arcFeat) return;
+  await rpc.invoke('addTempLayerGeoJSON', [
+    id, fc([arcFeat]),
+    { type:'line',
+      paint:{ 'line-color':color,'line-width':width,'line-opacity':opacity },
+    },
+  ]);
+}
+
+/** Ponto do sol (circle) + mastro vertical (line) */
+async function plotSunDot(lat, lng, doy, hr, radius) {
+  await rm(L.DOT); await rm(L.POLE);
+  const s=calcSun(lat,lng,doy,hr); if(!s.day) return;
+  const a=s.alt*D2R, z=s.az*D2R;
+  const x=radius*Math.cos(a)*Math.sin(z), y=radius*Math.cos(a)*Math.cos(z);
+  const elev=Math.max(0,radius*Math.sin(a));
+  let sLng,sLat;
+  try { [sLng,sLat]=await rpc.invoke('fromProjected',[[x,y],[lng,lat]]); }
+  catch { [sLng,sLat]=local2geo(x,y,lng,lat); }
+  const col=s.alt>20?'#F59E0B':s.alt>5?'#D97706':'#B45309';
+  // Mastro: line Z=0→elev
+  await rpc.invoke('addTempLayerGeoJSON',[
+    L.POLE, fc([feat('LineString',[[sLng,sLat,0],[sLng,sLat,elev]])]),
+    { type:'line', paint:{'line-color':col,'line-width':1.5,'line-opacity':0.5} },
+  ]);
+  // Círculo solar: circle-pitch-alignment:'map'
+  await rpc.invoke('addTempLayerGeoJSON',[
+    L.DOT, fc([feat('Point',[sLng,sLat,elev])]),
+    { type:'circle', paint:{'circle-color':col,'circle-radius':12,'circle-opacity':1,
+        'circle-pitch-alignment':'map','circle-stroke-width':2.5,
+        'circle-stroke-color':'#ffffff','circle-stroke-opacity':.9} },
+  ]);
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  CARTA SOLAR SVG — inline no painel, sem RPC (Ladybug-style)
+// ══════════════════════════════════════════════════════════════════════
 const SR=85, SCX=100, SCY=100;
-const sun2svg = (alt,az) => { const r=SR*Math.cos(alt*D2R); return [SCX+r*Math.sin(az*D2R), SCY-r*Math.cos(az*D2R)]; };
+const sun2svg = (alt,az) => {
+  const r=SR*Math.cos(alt*D2R);
+  return [SCX+r*Math.sin(az*D2R), SCY-r*Math.cos(az*D2R)];
+};
 function buildArcPath(lat,lng,doy) {
   const pts=[];
   for(let h=0;h<=24;h+=0.2){
     const s=calcSun(lat,lng,doy,h); if(!s.day||s.alt<0) continue;
-    const [x,y]=sun2svg(s.alt,s.az); pts.push(pts.length===0?`M${x.toFixed(1)},${y.toFixed(1)}`:`L${x.toFixed(1)},${y.toFixed(1)}`);
+    const [x,y]=sun2svg(s.alt,s.az);
+    pts.push(pts.length===0?`M${x.toFixed(1)},${y.toFixed(1)}`:`L${x.toFixed(1)},${y.toFixed(1)}`);
   }
   return pts.join('');
 }
 
 function MiniSolarChart({ lat, lng, doy, sunRes, seas }) {
-  const paths = useMemo(()=>({ sum: buildArcPath(lat,lng,seas.sum), win: buildArcPath(lat,lng,seas.win), eq: buildArcPath(lat,lng,seas.eqMar), tod: buildArcPath(lat,lng,doy) }),[lat,lng,doy,seas]);
+  const paths = useMemo(()=>({
+    sum: buildArcPath(lat,lng,seas.sum),
+    win: buildArcPath(lat,lng,seas.win),
+    eq:  buildArcPath(lat,lng,seas.eqMar),
+    tod: buildArcPath(lat,lng,doy),
+  }),[lat,lng,doy,seas]);
+
   const dot = sunRes?.day ? sun2svg(sunRes.alt,sunRes.az) : null;
+
   return h('div',{className:'bg-[#080c12] border border-slate-800 rounded-lg overflow-hidden'},
-    h('div',{className:'flex items-center justify-between px-3 py-1.5 border-b border-slate-800'}, h('span',{className:'text-[10px] uppercase tracking-widest text-slate-600'},'Carta Solar'), sunRes&&h('span',{className:'text-[10px] text-slate-500 tabular-nums'}, sunRes.day?`az ${sunRes.az.toFixed(0)}° · alt ${sunRes.alt.toFixed(1)}°`:'noite')),
+    h('div',{className:'flex items-center justify-between px-3 py-1.5 border-b border-slate-800'},
+      h('span',{className:'text-[10px] uppercase tracking-widest text-slate-600'},'Carta Solar'),
+      sunRes&&h('span',{className:'text-[10px] text-slate-500 tabular-nums'},
+        sunRes.day?`az ${sunRes.az.toFixed(0)}° · alt ${sunRes.alt.toFixed(1)}°`:'noite'),
+    ),
     h('svg',{viewBox:'0 0 200 200',className:'w-full h-auto',style:{maxHeight:'196px'}},
       h('rect',{width:200,height:200,fill:'#080c12'}),
-      ...[{r:SR,s:'#1e3a5f',w:1.2},{r:SR*Math.cos(30*D2R),s:'#162032',w:.7},{r:SR*Math.cos(60*D2R),s:'#162032',w:.7}].map(({r,s,w},i)=>h('circle',{key:i,cx:SCX,cy:SCY,r:r.toFixed(1),stroke:s,strokeWidth:w,fill:'none'})),
-      h('text',{x:SCX+2,y:SCY-SR*Math.cos(30*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'30°'), h('text',{x:SCX+2,y:SCY-SR*Math.cos(60*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'60°'),
-      ...[...Array(12)].map((_,i)=>{ const ar=i*30*D2R,card=i%3===0; return h('line',{key:i,x1:SCX,y1:SCY,x2:(SCX+SR*Math.sin(ar)).toFixed(1),y2:(SCY-SR*Math.cos(ar)).toFixed(1), stroke:card?'#1e3a5f':'#0f172a',strokeWidth:card?.7:.35}); }),
-      ...[{t:'N',x:SCX,y:9},{t:'S',x:SCX,y:197},{t:'L',x:194,y:SCY+3},{t:'O',x:6,y:SCY+3}].map(({t,x,y})=>h('text',{key:t,x,y,textAnchor:'middle',fill:'#334155',fontSize:8,fontFamily:'Hind',fontWeight:'600'},t)),
-      paths.sum&&h('path',{d:paths.sum,stroke:'#F59E0B',strokeWidth:1.8,fill:'none',opacity:.8}), paths.win&&h('path',{d:paths.win,stroke:'#38BDF8',strokeWidth:1.8,fill:'none',opacity:.75}),
-      paths.eq &&h('path',{d:paths.eq, stroke:'#34D399',strokeWidth:1.8,fill:'none',opacity:.75}), paths.tod&&h('path',{d:paths.tod,stroke:'#ffffff',strokeWidth:2,  fill:'none',opacity:.95}),
-      dot&&h('g',null, h('line',{x1:SCX,y1:SCY,x2:dot[0].toFixed(1),y2:dot[1].toFixed(1), stroke:'#F59E0B',strokeWidth:.5,opacity:.3,strokeDasharray:'2,2'}), h('circle',{cx:dot[0].toFixed(1),cy:dot[1].toFixed(1),r:8,fill:'#F59E0B',opacity:.12}), h('circle',{cx:dot[0].toFixed(1),cy:dot[1].toFixed(1),r:4.5,fill:'#F59E0B',stroke:'#fff',strokeWidth:1.2}) ),
-      h('circle',{cx:SCX,cy:SCY,r:2,fill:'#1e293b'})
+      // Anéis de altitude
+      ...[{r:SR,s:'#1e3a5f',w:1.2},{r:SR*Math.cos(30*D2R),s:'#162032',w:.7},{r:SR*Math.cos(60*D2R),s:'#162032',w:.7}]
+        .map(({r,s,w},i)=>h('circle',{key:i,cx:SCX,cy:SCY,r:r.toFixed(1),stroke:s,strokeWidth:w,fill:'none'})),
+      // Rótulos de altitude
+      h('text',{x:SCX+2,y:SCY-SR*Math.cos(30*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'30°'),
+      h('text',{x:SCX+2,y:SCY-SR*Math.cos(60*D2R)+8,fill:'#1e3a5f',fontSize:6,fontFamily:'Hind'},'60°'),
+      // Radiais de azimute
+      ...[...Array(12)].map((_,i)=>{
+        const ar=i*30*D2R,card=i%3===0;
+        return h('line',{key:i,x1:SCX,y1:SCY,
+          x2:(SCX+SR*Math.sin(ar)).toFixed(1),y2:(SCY-SR*Math.cos(ar)).toFixed(1),
+          stroke:card?'#1e3a5f':'#0f172a',strokeWidth:card?.7:.35});
+      }),
+      // Rótulos cardeais
+      ...[{t:'N',x:SCX,y:9},{t:'S',x:SCX,y:197},{t:'L',x:194,y:SCY+3},{t:'O',x:6,y:SCY+3}]
+        .map(({t,x,y})=>h('text',{key:t,x,y,textAnchor:'middle',fill:'#334155',fontSize:8,fontFamily:'Hind',fontWeight:'600'},t)),
+      // Trajetórias (linhas finas Ladybug-style)
+      paths.sum&&h('path',{d:paths.sum,stroke:'#F59E0B',strokeWidth:1.8,fill:'none',opacity:.8}),
+      paths.win&&h('path',{d:paths.win,stroke:'#38BDF8',strokeWidth:1.8,fill:'none',opacity:.75}),
+      paths.eq &&h('path',{d:paths.eq, stroke:'#34D399',strokeWidth:1.8,fill:'none',opacity:.75}),
+      paths.tod&&h('path',{d:paths.tod,stroke:'#ffffff',strokeWidth:2,  fill:'none',opacity:.95}),
+      // Ponto solar
+      dot&&h('g',null,
+        h('line',{x1:SCX,y1:SCY,x2:dot[0].toFixed(1),y2:dot[1].toFixed(1),
+          stroke:'#F59E0B',strokeWidth:.5,opacity:.3,strokeDasharray:'2,2'}),
+        h('circle',{cx:dot[0].toFixed(1),cy:dot[1].toFixed(1),r:8,fill:'#F59E0B',opacity:.12}),
+        h('circle',{cx:dot[0].toFixed(1),cy:dot[1].toFixed(1),r:4.5,fill:'#F59E0B',stroke:'#fff',strokeWidth:1.2}),
+      ),
+      h('circle',{cx:SCX,cy:SCY,r:2,fill:'#1e293b'}),
     ),
-    h('div',{className:'flex flex-wrap gap-x-3 gap-y-1 px-3 py-2 border-t border-slate-800'}, ...[{c:'#F59E0B',l:seas.sumLbl},{c:'#38BDF8',l:seas.winLbl},{c:'#34D399',l:'Equinócio'},{c:'#ffffff',l:'Hoje'}].map(({c,l})=>h('span',{key:l,className:'flex items-center gap-1'}, h('div',{className:'w-4 h-[2px] rounded',style:{background:c}}), h('span',{className:'text-[9px] text-slate-500'},l))) )
+    h('div',{className:'flex flex-wrap gap-x-3 gap-y-1 px-3 py-2 border-t border-slate-800'},
+      ...[{c:'#F59E0B',l:seas.sumLbl},{c:'#38BDF8',l:seas.winLbl},
+          {c:'#34D399',l:'Equinócio'},{c:'#ffffff',l:'Hoje'}]
+        .map(({c,l})=>h('span',{key:l,className:'flex items-center gap-1'},
+          h('div',{className:'w-4 h-[2px] rounded',style:{background:c}}),
+          h('span',{className:'text-[9px] text-slate-500'},l),
+        )),
+    ),
   );
 }
 
-// ─── INTERFACE REACT ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  APP PRINCIPAL
+// ══════════════════════════════════════════════════════════════════════
 const fmtH = h => `${String(Math.floor(h)).padStart(2,'0')}:${String(Math.round((h-Math.floor(h))*60)).padStart(2,'0')}`;
 const fmtD = d => new Date(new Date().getFullYear(),0,d).toLocaleDateString('pt-BR',{day:'numeric',month:'short'});
 const _n=new Date(), _doy=Math.floor((_n-new Date(_n.getFullYear(),0,0))/86400000);
-const INIT={lat:-23.55,lng:-46.63,hr:Math.round((_n.getHours()+_n.getMinutes()/60)*4)/4, doy:Math.max(1,Math.min(365,_doy)),radius:200};
+const INIT={lat:-23.55,lng:-46.63,hr:Math.round((_n.getHours()+_n.getMinutes()/60)*4)/4,
+  doy:Math.max(1,Math.min(365,_doy)),radius:200};
 
 function SolarApp() {
-  const [lat,setLat]=useState(INIT.lat); const [lng,setLng]=useState(INIT.lng);
-  const [hr, setHr ]=useState(INIT.hr); const [doy,setDoy]=useState(INIT.doy); const [rad,setRad]=useState(INIT.radius);
-  const [showChart,setShowChart]=useState(false); const [syncSt,setSyncSt]=useState('idle');
-  const seas = useMemo(()=>seasons(lat),[lat]); const sunNow = useMemo(()=>calcSun(lat,lng,doy,hr),[lat,lng,doy,hr]);
-  const syncRef=useRef(null), dotRef=useRef(null), fixGen=useRef(0);
+  const [lat,setLat]=useState(INIT.lat);
+  const [lng,setLng]=useState(INIT.lng);
+  const [hr, setHr ]=useState(INIT.hr);
+  const [doy,setDoy]=useState(INIT.doy);
+  const [rad,setRad]=useState(INIT.radius);
+  const [showChart,setShowChart]=useState(false);   // padrão OFF
+  const [syncSt,setSyncSt]=useState('idle');
 
+  const seas    = useMemo(()=>seasons(lat),[lat]);
+  const sunNow  = useMemo(()=>calcSun(lat,lng,doy,hr),[lat,lng,doy,hr]);
+
+  const syncRef=useRef(null), dotRef=useRef(null);
+  const fixGen=useRef(0), todGen=useRef(0);
+
+  // ── Ef.1: buscar centro do mapa (uma vez ao montar) ───────────────
+  // CORREÇÃO: removido giraffeState.addListener(['mapBounds'])
+  // pois 'mapBounds' não é uma chave válida no estado do Giraffe e
+  // disparava mensagens internas que o SDK não conseguia parsear.
   useEffect(()=>{
     (async()=>{
       try {
-        const fc2=await rpc.invoke('getMapBounds',[]); const ring=fc2?.features?.[0]?.geometry?.coordinates?.[0]; if(!ring) return;
+        const fc2=await rpc.invoke('getMapBounds',[]);
+        const ring=fc2?.features?.[0]?.geometry?.coordinates?.[0]; if(!ring) return;
         const lo=ring.map(c=>c[0]),la=ring.map(c=>c[1]);
-        setLng(parseFloat(((Math.min(...lo)+Math.max(...lo))/2).toFixed(6))); setLat(parseFloat(((Math.min(...la)+Math.max(...la))/2).toFixed(6)));
+        setLng(parseFloat(((Math.min(...lo)+Math.max(...lo))/2).toFixed(6)));
+        setLat(parseFloat(((Math.min(...la)+Math.max(...la))/2).toFixed(6)));
       }catch{}
     })();
   },[]);
 
+  // ── Ef.2: sync de sombras (debounce 120ms) ────────────────────────
   useEffect(()=>{
     if(syncRef.current) clearTimeout(syncRef.current);
-    syncRef.current=setTimeout(async()=>{ setSyncSt('syncing'); const r=await syncGiraffeSun(sunNow.az,sunNow.alt); setSyncSt(r.ok?'ok':r.why); },120);
+    syncRef.current=setTimeout(async()=>{
+      setSyncSt('syncing');
+      const r=await syncGiraffeSun(sunNow.az,sunNow.alt);
+      setSyncSt(r.ok?'ok':r.why);
+    },120);
     return ()=>clearTimeout(syncRef.current);
   },[sunNow]);
 
+  // ── Ef.3: bolinha do sol (debounce 80ms, só quando mapa ligado) ───
   useEffect(()=>{
-    if(!showChart) return; if(dotRef.current) clearTimeout(dotRef.current);
-    dotRef.current=setTimeout(()=>plotSunDotAndPole(lat,lng,doy,hr,rad),80);
+    if(!showChart) return;
+    if(dotRef.current) clearTimeout(dotRef.current);
+    dotRef.current=setTimeout(()=>plotSunDot(lat,lng,doy,hr,rad),80);
     return ()=>clearTimeout(dotRef.current);
   },[lat,lng,doy,hr,rad,showChart]);
 
-  useEffect(()=>{ if(!showChart) { Object.values(L).forEach(rm); } },[showChart]);
+  // ── Ef.4: desligar mapa ───────────────────────────────────────────
+  useEffect(()=>{ if(!showChart) rmAll(); },[showChart]);
 
+  // ── Ef.5: compasso + gaiola 3D (lat/lng/rad) ─────────────────────
   useEffect(()=>{
-    if(!showChart) return; const gen=++fixGen.current;
+    if(!showChart) return;
+    (async()=>{
+      await plotCompassGround(lat,lng,rad);
+      await plotDome3D(lat,lng,rad);
+    })();
+  },[lat,lng,rad,showChart]);
+
+  // ── Ef.6: arcos fixos (solstícios+equinócio) — SEQUENCIAIS ───────
+  // CORREÇÃO: era Promise.all (3 RPCs simultâneos) → race condition no
+  // mini-iframe-rpc → mensagens cruzadas → "[object Object]" parse error
+  useEffect(()=>{
+    if(!showChart) return;
+    const gen=++fixGen.current;
     const t=setTimeout(async()=>{
       if(gen!==fixGen.current) return;
-      await plotCompassGround(lat,lng,rad);
-      await plotAnalyticWireframes(lat, lng, rad, doy);
-    },300); return ()=>{ clearTimeout(t); fixGen.current=gen+1; };
-  },[lat,lng,rad,doy,showChart]);
+      // Sequencial: gera e plota um arco de cada vez
+      const sumF=await genArc3D(lat,lng,seas.sum,rad); if(gen!==fixGen.current)return;
+      await plotArcLine(L.SUM,sumF,'#F59E0B',2,.75);
+      const winF=await genArc3D(lat,lng,seas.win,rad); if(gen!==fixGen.current)return;
+      await plotArcLine(L.WIN,winF,'#38BDF8',2,.70);
+      const eqF =await genArc3D(lat,lng,seas.eqMar,rad); if(gen!==fixGen.current)return;
+      await plotArcLine(L.EQX,eqF, '#34D399',2,.70);
+    },400);
+    return ()=>{ clearTimeout(t); fixGen.current=gen+1; };
+  },[lat,lng,rad,seas,showChart]);
 
-  useEffect(()=>()=>Object.values(L).forEach(rm),[]);
+  // ── Ef.7: arco do dia atual (debounce 400ms) ─────────────────────
+  useEffect(()=>{
+    if(!showChart) return;
+    const gen=++todGen.current;
+    const t=setTimeout(async()=>{
+      if(gen!==todGen.current) return;
+      const f=await genArc3D(lat,lng,doy,rad); if(gen!==todGen.current)return;
+      await plotArcLine(L.TOD,f,'#ffffff',2.5,.9);
+    },400);
+    return ()=>{ clearTimeout(t); todGen.current=gen+1; };
+  },[lat,lng,doy,rad,showChart]);
 
-  const syncInfo={ ok: {msg:'✓ Sombras Sincronizadas', cls:'text-emerald-400'}, syncing: {msg:'⟳ Calculando...', cls:'text-amber-400'}, night: {msg:'☾ Sol abaixo do horizonte', cls:'text-slate-500'}, no_views:{msg:'⚠ Crie uma View no projeto', cls:'text-red-400'}, error: {msg:'⚠ Erro — ver console (F12)', cls:'text-red-400'}, idle: {msg:'', cls:''} }[syncSt]||{msg:'',cls:''};
-  const eqActive=doy===79||doy===266; const eqSub=doy===266?'23 Set':'20 Mar';
+  // ── Ef.8: cleanup ─────────────────────────────────────────────────
+  useEffect(()=>()=>rmAll(),[]);
+
+  const syncInfo={
+    ok:      {msg:'✓ Sombras Sincronizadas',     cls:'text-emerald-400'},
+    syncing: {msg:'⟳ Calculando...',             cls:'text-amber-400'},
+    night:   {msg:'☾ Sol abaixo do horizonte',   cls:'text-slate-500'},
+    no_views:{msg:'⚠ Crie uma View no projeto',  cls:'text-red-400'},
+    error:   {msg:'⚠ Erro — ver console (F12)',  cls:'text-red-400'},
+    idle:    {msg:'',                             cls:''},
+  }[syncSt]||{msg:'',cls:''};
+
+  const eqActive=doy===79||doy===266;
+  const eqSub   =doy===266?'23 Set':'20 Mar';
 
   return h('div',{className:'h-screen flex flex-col p-3 gap-3 bg-[#0f1117]'},
+    // Header
     h('div',{className:'flex items-center justify-between border-b border-slate-800 pb-2.5'},
-      h('div',null, h('h1',{className:'text-base font-semibold text-white'},'☀ LB Sun Path 3D [vG6]'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`)),
-      syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg)
+      h('div',null,
+        h('h1',{className:'text-base font-semibold text-white'},'☀ Sun Path 3D · KV'),
+        h('p',{className:'text-[10px] text-slate-600 mt-0.5'},`${lat.toFixed(4)}° · ${lng.toFixed(4)}°`),
+      ),
+      syncInfo.msg&&h('span',{className:`text-[9px] px-2 py-1 bg-slate-900 rounded ${syncInfo.cls}`},syncInfo.msg),
     ),
+
     h('div',{className:'flex-1 overflow-y-auto kv-scroll flex flex-col gap-3'},
+
+      // Carta SVG
       h(MiniSolarChart,{lat,lng,doy,sunRes:sunNow,seas}),
+
+      // Presets
       h('div',{className:'grid grid-cols-3 gap-2'},
-        ...[{e:'☀',l:'Verão', ac:doy===seas.sum, bc:'amber', fn:()=>setDoy(seas.sum), sub:seas.sumLbl.split(' ')[1]}, {e:'❄',l:'Inverno', ac:doy===seas.win, bc:'sky', fn:()=>setDoy(seas.win), sub:seas.winLbl.split(' ')[1]}, {e:'◎',l:'Equinócio',ac:eqActive, bc:'emerald',fn:()=>setDoy(d=>d===79?266:79), sub:eqSub}].map(({e,l,ac,bc,fn,sub})=>{
-          const C={amber:{b:'border-amber-500/25',t:'text-amber-400',bg:'bg-amber-500/10'}, sky: {b:'border-sky-500/25', t:'text-sky-400', bg:'bg-sky-500/10'}, emerald:{b:'border-emerald-500/25',t:'text-emerald-400',bg:'bg-emerald-500/10'}}[bc];
-          return h('button',{key:l,onClick:fn, className:`flex flex-col items-center py-2 px-1 rounded border transition-all ${C.b} ${ac?C.bg:'bg-transparent hover:bg-white/[.02]'}`}, h('span',{className:'text-sm leading-none'},e), h('span',{className:`text-[10px] font-semibold ${C.t}`},l), h('span',{className:'text-[9px] text-slate-600'},sub));
-        })
+        ...[
+          {e:'☀',l:'Verão',   ac:doy===seas.sum, bc:'amber', fn:()=>setDoy(seas.sum),   sub:seas.sumLbl.split(' ')[1]},
+          {e:'❄',l:'Inverno', ac:doy===seas.win, bc:'sky',   fn:()=>setDoy(seas.win),   sub:seas.winLbl.split(' ')[1]},
+          {e:'◎',l:'Equinócio',ac:eqActive,      bc:'emerald',fn:()=>setDoy(d=>d===79?266:79), sub:eqSub},
+        ].map(({e,l,ac,bc,fn,sub})=>{
+          const C={amber:{b:'border-amber-500/25',t:'text-amber-400',bg:'bg-amber-500/10'},
+                   sky:  {b:'border-sky-500/25',  t:'text-sky-400',  bg:'bg-sky-500/10'},
+                   emerald:{b:'border-emerald-500/25',t:'text-emerald-400',bg:'bg-emerald-500/10'}}[bc];
+          return h('button',{key:l,onClick:fn,
+            className:`flex flex-col items-center py-2 px-1 rounded border transition-all ${C.b} ${ac?C.bg:'bg-transparent hover:bg-white/[.02]'}`},
+            h('span',{className:'text-sm leading-none'},e),
+            h('span',{className:`text-[10px] font-semibold ${C.t}`},l),
+            h('span',{className:'text-[9px] text-slate-600'},sub),
+          );
+        }),
       ),
+
+      // Sliders
       h('div',{className:'bg-[#111827] rounded-lg border border-slate-800 p-3 flex flex-col gap-4'},
-        ...[{l:'Horário', v:fmtH(hr), min:0, max:23.99,step:.25,val:hr, fn:v=>setHr(+v)}, {l:'Data', v:fmtD(doy),min:1, max:365, step:1, val:doy, fn:v=>setDoy(+v)}, {l:'Raio', v:rad+'m', min:50, max:500, step:10, val:rad, fn:v=>setRad(+v)}].map(({l,v,min,max,step,val,fn})=>h('div',{key:l}, h('div',{className:'flex justify-between text-[11px] mb-2'}, h('span',{className:'text-slate-400'},l), h('span',{className:'text-amber-400'},v)), h('input',{type:'range',className:'kv-slider',min,max,step,value:val,onChange:e=>fn(e.target.value)})))
+        ...[
+          {l:'Horário', v:fmtH(hr), min:0,  max:23.99,step:.25,val:hr,  fn:v=>setHr(+v)},
+          {l:'Data',    v:fmtD(doy),min:1,  max:365,  step:1,  val:doy, fn:v=>setDoy(+v)},
+          {l:'Raio',    v:rad+'m',  min:50, max:500,  step:10, val:rad, fn:v=>setRad(+v)},
+        ].map(({l,v,min,max,step,val,fn})=>h('div',{key:l},
+          h('div',{className:'flex justify-between text-[11px] mb-2'},
+            h('span',{className:'text-slate-400'},l),
+            h('span',{className:'text-amber-400'},v),
+          ),
+          h('input',{type:'range',className:'kv-slider',min,max,step,value:val,onChange:e=>fn(e.target.value)}),
+        )),
       ),
-      h('div',{className:'flex items-center justify-between p-3 bg-[#111827] rounded-lg border border-slate-800 mb-1'},
-        h('div',null, h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'), h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)')),
-        h('button',{className:`toggle ${showChart?'on':''}`,onClick:()=>setShowChart(v=>!v)})
-      )
-    )
+
+      // Toggle
+      h('div',{className:'flex items-center justify-between p-3 bg-[#111827] rounded-lg border border-slate-800'},
+        h('div',null,
+          h('span',{className:'text-sm font-medium text-slate-300'},'Carta Solar no Mapa 3D'),
+          h('p',{className:'text-[10px] text-slate-600 mt-0.5'},showChart?'Ligado — layers visíveis':'Desligado (padrão)'),
+        ),
+        h('button',{className:`toggle ${showChart?'on':''}`,onClick:()=>setShowChart(v=>!v)}),
+      ),
+
+    ),
   );
 }
 
